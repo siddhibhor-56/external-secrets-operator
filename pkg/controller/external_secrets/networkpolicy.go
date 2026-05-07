@@ -61,7 +61,7 @@ func (r *Reconciler) createOrApplyStaticNetworkPolicies(esc *operatorv1alpha1.Ex
 		},
 		{
 			assetName: allowCertControllerTrafficAssetName,
-			condition: !isCertManagerConfigEnabled(esc), // Only if cert-controller is enabled
+			condition: !isCertManagerConfigEnabled(esc), // Only if cert-controller is needed (cert-manager replaces it)
 		},
 		{
 			assetName: allowBitwardenServerTrafficAssetName,
