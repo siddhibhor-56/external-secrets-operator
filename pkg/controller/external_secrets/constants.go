@@ -66,6 +66,19 @@ const (
 	// https://cs.opensource.google/go/go/+/refs/tags/go1.24.4:src/crypto/x509/root_linux.go;l=22
 	trustedCABundleMountPath = "/etc/pki/tls/certs"
 
+	// proxyEgressNetworkPolicyName is the name of the programmatically-built proxy egress NetworkPolicy.
+	// Created only when spec.appConfig.proxy.networkPolicyAllowProxyEgressAll is Managed (default)
+	// and an effective proxy is configured via getProxyConfiguration().
+	proxyEgressNetworkPolicyName = "eso-sys-proxy-egress-core"
+
+	// migrationCompleteAnnotation is set on ExternalSecretsConfig after legacy unprefixed
+	// NetworkPolicies have been pruned on the first reconcile under the new naming scheme.
+	migrationCompleteAnnotation = "operator.openshift.io/network-policy-migration-complete"
+
+	// userNetworkPolicyPrefix is prepended to user-defined NetworkPolicy names from spec.networkPolicies[].
+	// The user writes name: allow-external-secrets-egress; the K8s object is eso-user-allow-external-secrets-egress.
+	userNetworkPolicyPrefix = "eso-user-"
+
 	// Proxy environment variable names (uppercase).
 	httpProxyEnvVar  = "HTTP_PROXY"
 	httpsProxyEnvVar = "HTTPS_PROXY"

@@ -277,7 +277,7 @@ func TestCreateOrApplyCustomNetworkPolicies(t *testing.T) {
 				})
 				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 					if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
-						if np.Name != "test-custom-policy" {
+						if np.Name != userNetworkPolicyPrefix+"test-custom-policy" {
 							return fmt.Errorf("unexpected network policy name: %s", np.Name)
 						}
 					}
@@ -343,7 +343,7 @@ func TestCreateOrApplyCustomNetworkPolicies(t *testing.T) {
 					},
 				}
 			},
-			wantErr: "failed to create network policy external-secrets/test-fail-policy: test client error",
+			wantErr: "failed to create network policy external-secrets/" + userNetworkPolicyPrefix + "test-fail-policy: test client error",
 		},
 		{
 			name: "custom network policy updated successfully",
@@ -352,7 +352,7 @@ func TestCreateOrApplyCustomNetworkPolicies(t *testing.T) {
 					if o, ok := obj.(*networkingv1.NetworkPolicy); ok {
 						np := &networkingv1.NetworkPolicy{
 							ObjectMeta: metav1.ObjectMeta{
-								Name:      "test-update-policy",
+								Name:      userNetworkPolicyPrefix + "test-update-policy",
 								Namespace: externalsecretsDefaultNamespace,
 							},
 						}
@@ -494,7 +494,7 @@ func TestBuildNetworkPolicyFromConfig(t *testing.T) {
 			},
 			wantErr: false,
 			wantPolicy: func(np *networkingv1.NetworkPolicy) bool {
-				return np.Name == "test-core-policy" &&
+				return np.Name == userNetworkPolicyPrefix+"test-core-policy" &&
 					np.Spec.PodSelector.MatchLabels["app.kubernetes.io/name"] == externalsecretsCommonName &&
 					len(np.Spec.Egress) == 1 &&
 					len(np.Spec.PolicyTypes) == 1 &&
@@ -510,7 +510,7 @@ func TestBuildNetworkPolicyFromConfig(t *testing.T) {
 			},
 			wantErr: false,
 			wantPolicy: func(np *networkingv1.NetworkPolicy) bool {
-				return np.Name == "test-bitwarden-policy" &&
+				return np.Name == userNetworkPolicyPrefix+"test-bitwarden-policy" &&
 					np.Spec.PodSelector.MatchLabels["app.kubernetes.io/name"] == bitwardenSDKServerContainerName
 			},
 		},
@@ -543,6 +543,390 @@ func TestBuildNetworkPolicyFromConfig(t *testing.T) {
 				if tt.wantPolicy != nil && !tt.wantPolicy(np) {
 					t.Errorf("Network policy validation failed")
 				}
+			}
+		})
+	}
+}
+
+func TestShouldManageProxyEgress(t *testing.T) {
+	tests := []struct {
+		name        string
+		proxyConfig *operatorv1alpha1.ProxyConfig
+		escProxy    *operatorv1alpha1.ProxyConfig
+		want        bool
+	}{
+		{
+			name:        "no proxy configured",
+			proxyConfig: nil,
+			want:        false,
+		},
+		{
+			name:        "proxy from ESM or OLM, ESC proxy nil defaults to Managed",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
+			escProxy:    nil,
+			want:        true,
+		},
+		{
+			name:        "explicit Managed mode",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
+			escProxy: &operatorv1alpha1.ProxyConfig{
+				HTTPSProxy:                      "https://proxy.example.com:8080",
+				NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+			},
+			want: true,
+		},
+		{
+			name:        "Unmanaged mode",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
+			escProxy: &operatorv1alpha1.ProxyConfig{
+				HTTPSProxy:                      "https://proxy.example.com:8080",
+				NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+			},
+			want: false,
+		},
+		{
+			name:        "empty mode field defaults to Managed",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
+			escProxy: &operatorv1alpha1.ProxyConfig{
+				HTTPSProxy: "https://proxy.example.com:8080",
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			esc := commontest.TestExternalSecretsConfig()
+			esc.Spec.ApplicationConfig.Proxy = tt.escProxy
+			got := shouldManageProxyEgress(esc, tt.proxyConfig)
+			if got != tt.want {
+				t.Errorf("shouldManageProxyEgress() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetProxyPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		proxyConfig *operatorv1alpha1.ProxyConfig
+		want        int32
+	}{
+		{
+			name:        "HTTPS proxy with explicit port",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
+			want:        8080,
+		},
+		{
+			name:        "HTTP proxy with explicit port",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPProxy: "http://proxy.example.com:3128"},
+			want:        3128,
+		},
+		{
+			name:        "HTTPS proxy without port uses scheme default 443",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com"},
+			want:        443,
+		},
+		{
+			name:        "HTTP proxy without port uses scheme default 80",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPProxy: "http://proxy.example.com"},
+			want:        80,
+		},
+		{
+			name: "HTTPS proxy takes priority over HTTP proxy",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{
+				HTTPSProxy: "https://proxy.example.com:9443",
+				HTTPProxy:  "http://proxy.example.com:8080",
+			},
+			want: 9443,
+		},
+		{
+			name:        "no proxy URLs falls back to default port 3128",
+			proxyConfig: &operatorv1alpha1.ProxyConfig{},
+			want:        3128,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getProxyPort(tt.proxyConfig)
+			if got != tt.want {
+				t.Errorf("getProxyPort() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateOrApplyProxyEgressNetworkPolicy(t *testing.T) {
+	proxyEgressNPName := fmt.Sprintf("%s/%s", externalsecretsDefaultNamespace, proxyEgressNetworkPolicyName)
+
+	tests := []struct {
+		name                        string
+		preReq                      func(*Reconciler, *fakes.FakeCtrlClient)
+		updateExternalSecretsConfig func(*operatorv1alpha1.ExternalSecretsConfig)
+		wantErr                     string
+	}{
+		{
+			name: "no proxy configured, no NP created or deleted",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, nil
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					if np, ok := obj.(*networkingv1.NetworkPolicy); ok && np.Name == proxyEgressNetworkPolicyName {
+						return fmt.Errorf("proxy egress NP should not be created without proxy")
+					}
+					return nil
+				})
+			},
+		},
+		{
+			name: "proxy Unmanaged, existing NP deleted",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
+						existing := &networkingv1.NetworkPolicy{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      proxyEgressNetworkPolicyName,
+								Namespace: externalsecretsDefaultNamespace,
+							},
+						}
+						existing.DeepCopyInto(np)
+					}
+					return true, nil
+				})
+				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+					return nil
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
+					HTTPSProxy:                      "https://proxy.example.com:8080",
+					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+				}
+			},
+		},
+		{
+			name: "proxy Managed, NP created",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, nil
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
+						if np.Name != proxyEgressNetworkPolicyName {
+							return fmt.Errorf("unexpected NP name: %s", np.Name)
+						}
+					}
+					return nil
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
+					HTTPSProxy:                      "https://proxy.example.com:8080",
+					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+				}
+			},
+		},
+		{
+			name: "proxy Managed, existing NP updated",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
+						existing := &networkingv1.NetworkPolicy{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      proxyEgressNetworkPolicyName,
+								Namespace: externalsecretsDefaultNamespace,
+							},
+						}
+						existing.DeepCopyInto(np)
+					}
+					return true, nil
+				})
+				m.UpdateWithRetryCalls(func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+					return nil
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
+					HTTPSProxy:                      "https://proxy.example.com:8080",
+					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+				}
+			},
+		},
+		{
+			name: "proxy Managed, NP creation fails",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, nil
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*networkingv1.NetworkPolicy); ok {
+						return commontest.ErrTestClient
+					}
+					return nil
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
+					HTTPSProxy:                      "https://proxy.example.com:8080",
+					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+				}
+			},
+			wantErr: "failed to create proxy egress network policy " + proxyEgressNPName + ": test client error",
+		},
+		{
+			name: "proxy Unmanaged, Exists check fails",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, commontest.ErrTestClient
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
+					HTTPSProxy:                      "https://proxy.example.com:8080",
+					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+				}
+			},
+			wantErr: "failed to check existence of proxy egress network policy " + proxyEgressNPName + ": test client error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := testReconciler(t)
+			mock := &fakes.FakeCtrlClient{}
+			r.CtrlClient = mock
+			if tt.preReq != nil {
+				tt.preReq(r, mock)
+			}
+
+			esc := commontest.TestExternalSecretsConfig()
+			if tt.updateExternalSecretsConfig != nil {
+				tt.updateExternalSecretsConfig(esc)
+			}
+
+			err := r.createOrApplyProxyEgressNetworkPolicy(esc, testResourceMetadata(esc), false)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Errorf("Expected error: %v, got: %v", tt.wantErr, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestCleanupMigratedNetworkPolicies(t *testing.T) {
+	tests := []struct {
+		name                        string
+		preReq                      func(*Reconciler, *fakes.FakeCtrlClient)
+		updateExternalSecretsConfig func(*operatorv1alpha1.ExternalSecretsConfig)
+		wantErr                     string
+	}{
+		{
+			name: "no stale policies, migration already done",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+					// Return empty list — nothing to prune.
+					return nil
+				})
+				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+					return fmt.Errorf("Delete should not be called when no stale policies exist")
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Annotations = map[string]string{
+					migrationCompleteAnnotation: "true",
+				}
+			},
+		},
+		{
+			name: "stale labeled policy pruned",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+					if npList, ok := list.(*networkingv1.NetworkPolicyList); ok {
+						npList.Items = []networkingv1.NetworkPolicy{
+							{
+								ObjectMeta: metav1.ObjectMeta{
+									Name:      "eso-user-old-policy",
+									Namespace: externalsecretsDefaultNamespace,
+								},
+							},
+						}
+					}
+					return nil
+				})
+				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+					return nil
+				})
+			},
+			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
+				esc.Annotations = map[string]string{
+					migrationCompleteAnnotation: "true",
+				}
+				// No NetworkPolicies in spec — so "eso-user-old-policy" is stale.
+			},
+		},
+		{
+			name: "first reconcile without annotation triggers legacy cleanup and sets annotation",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+					return nil // No labeled stale policies.
+				})
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					// Simulate one legacy NP existing.
+					if ns.Name == "allow-api-server-egress" {
+						if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
+							np.Name = ns.Name
+							np.Namespace = ns.Namespace
+						}
+						return true, nil
+					}
+					return false, nil
+				})
+				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+					return nil
+				})
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					return nil
+				})
+			},
+			// No annotation on ESC — triggers migration path.
+		},
+		{
+			name: "List fails returns error",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+					return commontest.ErrTestClient
+				})
+			},
+			wantErr: "failed to list network policies in namespace external-secrets: test client error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := testReconciler(t)
+			mock := &fakes.FakeCtrlClient{}
+			r.CtrlClient = mock
+			if tt.preReq != nil {
+				tt.preReq(r, mock)
+			}
+
+			esc := commontest.TestExternalSecretsConfig()
+			if tt.updateExternalSecretsConfig != nil {
+				tt.updateExternalSecretsConfig(esc)
+			}
+
+			err := r.cleanupMigratedNetworkPolicies(esc, testResourceMetadata(esc))
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Errorf("Expected error: %v, got: %v", tt.wantErr, err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
 		})
 	}
