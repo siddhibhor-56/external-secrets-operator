@@ -67,13 +67,14 @@ const (
 	trustedCABundleMountPath = "/etc/pki/tls/certs"
 
 	// proxyEgressNetworkPolicyName is the name of the programmatically-built proxy egress NetworkPolicy.
-	// Created only when spec.appConfig.proxy.networkPolicyAllowProxyEgressAll is Managed (default)
+	// Created only when spec.appConfig.proxy.networkPolicyProvisioning is Managed (default)
 	// and an effective proxy is configured via getProxyConfiguration().
 	proxyEgressNetworkPolicyName = "eso-sys-proxy-egress-core"
 
-	// migrationCompleteAnnotation is set on ExternalSecretsConfig after legacy unprefixed
-	// NetworkPolicies have been pruned on the first reconcile under the new naming scheme.
-	migrationCompleteAnnotation = "operator.openshift.io/network-policy-migration-complete"
+	// skipNPCleanupAnnotation is set on ExternalSecretsConfig after the migration cleanup has
+	// completed. When present, cleanupMigratedNetworkPolicies skips the entire deletion loop
+	// on subsequent reconciles to avoid unnecessary API server round-trips.
+	skipNPCleanupAnnotation = "externalsecretsconfig.operator.openshift.io/skip-np-cleanup-check"
 
 	// userNetworkPolicyPrefix is prepended to user-defined NetworkPolicy names from spec.networkPolicies[].
 	// The user writes name: allow-external-secrets-egress; the K8s object is eso-user-allow-external-secrets-egress.

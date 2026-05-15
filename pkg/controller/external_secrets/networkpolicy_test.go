@@ -570,8 +570,8 @@ func TestShouldManageProxyEgress(t *testing.T) {
 			name:        "explicit Managed mode",
 			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
 			escProxy: &operatorv1alpha1.ProxyConfig{
-				HTTPSProxy:                      "https://proxy.example.com:8080",
-				NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+				HTTPSProxy:               "https://proxy.example.com:8080",
+				NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateManaged,
 			},
 			want: true,
 		},
@@ -579,8 +579,8 @@ func TestShouldManageProxyEgress(t *testing.T) {
 			name:        "Unmanaged mode",
 			proxyConfig: &operatorv1alpha1.ProxyConfig{HTTPSProxy: "https://proxy.example.com:8080"},
 			escProxy: &operatorv1alpha1.ProxyConfig{
-				HTTPSProxy:                      "https://proxy.example.com:8080",
-				NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+				HTTPSProxy:               "https://proxy.example.com:8080",
+				NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateUnmanaged,
 			},
 			want: false,
 		},
@@ -667,42 +667,24 @@ func TestCreateOrApplyProxyEgressNetworkPolicy(t *testing.T) {
 		wantErr                     string
 	}{
 		{
-			name: "no proxy configured, no NP created or deleted",
+			name: "no proxy configured, DeleteAllOf called idempotently",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
-					return false, nil
-				})
-				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
-					if np, ok := obj.(*networkingv1.NetworkPolicy); ok && np.Name == proxyEgressNetworkPolicyName {
-						return fmt.Errorf("proxy egress NP should not be created without proxy")
-					}
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
 					return nil
 				})
 			},
 		},
 		{
-			name: "proxy Unmanaged, existing NP deleted",
+			name: "proxy Unmanaged, existing NP deleted via DeleteAllOf",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
-					if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
-						existing := &networkingv1.NetworkPolicy{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      proxyEgressNetworkPolicyName,
-								Namespace: externalsecretsDefaultNamespace,
-							},
-						}
-						existing.DeepCopyInto(np)
-					}
-					return true, nil
-				})
-				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
 					return nil
 				})
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
-					HTTPSProxy:                      "https://proxy.example.com:8080",
-					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+					HTTPSProxy:               "https://proxy.example.com:8080",
+					NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateUnmanaged,
 				}
 			},
 		},
@@ -723,8 +705,8 @@ func TestCreateOrApplyProxyEgressNetworkPolicy(t *testing.T) {
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
-					HTTPSProxy:                      "https://proxy.example.com:8080",
-					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+					HTTPSProxy:               "https://proxy.example.com:8080",
+					NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateManaged,
 				}
 			},
 		},
@@ -749,8 +731,8 @@ func TestCreateOrApplyProxyEgressNetworkPolicy(t *testing.T) {
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
-					HTTPSProxy:                      "https://proxy.example.com:8080",
-					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+					HTTPSProxy:               "https://proxy.example.com:8080",
+					NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateManaged,
 				}
 			},
 		},
@@ -769,26 +751,26 @@ func TestCreateOrApplyProxyEgressNetworkPolicy(t *testing.T) {
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
-					HTTPSProxy:                      "https://proxy.example.com:8080",
-					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Managed,
+					HTTPSProxy:               "https://proxy.example.com:8080",
+					NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateManaged,
 				}
 			},
 			wantErr: "failed to create proxy egress network policy " + proxyEgressNPName + ": test client error",
 		},
 		{
-			name: "proxy Unmanaged, Exists check fails",
+			name: "proxy Unmanaged, DeleteAllOf fails",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
-					return false, commontest.ErrTestClient
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
+					return commontest.ErrTestClient
 				})
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Spec.ApplicationConfig.Proxy = &operatorv1alpha1.ProxyConfig{
-					HTTPSProxy:                      "https://proxy.example.com:8080",
-					NetworkPolicyAllowProxyEgressAll: operatorv1alpha1.Unmanaged,
+					HTTPSProxy:               "https://proxy.example.com:8080",
+					NetworkPolicyProvisioning: operatorv1alpha1.ManagementStateUnmanaged,
 				}
 			},
-			wantErr: "failed to check existence of proxy egress network policy " + proxyEgressNPName + ": test client error",
+			wantErr: "failed to delete proxy egress network policy " + proxyEgressNPName + ": test client error",
 		},
 	}
 
@@ -826,24 +808,20 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 		wantErr                     string
 	}{
 		{
-			name: "no stale policies, migration already done",
+			name: "skip entirely when skip annotation already present",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
 				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-					// Return empty list — nothing to prune.
-					return nil
-				})
-				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-					return fmt.Errorf("Delete should not be called when no stale policies exist")
+					return fmt.Errorf("List should not be called when skip annotation is set")
 				})
 			},
 			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
 				esc.Annotations = map[string]string{
-					migrationCompleteAnnotation: "true",
+					skipNPCleanupAnnotation: "true",
 				}
 			},
 		},
 		{
-			name: "stale labeled policy pruned",
+			name: "stale labeled policy pruned and annotation set",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
 				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 					if npList, ok := list.(*networkingv1.NetworkPolicyList); ok {
@@ -858,42 +836,26 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 					}
 					return nil
 				})
-				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-					return nil
-				})
-			},
-			updateExternalSecretsConfig: func(esc *operatorv1alpha1.ExternalSecretsConfig) {
-				esc.Annotations = map[string]string{
-					migrationCompleteAnnotation: "true",
-				}
-				// No NetworkPolicies in spec — so "eso-user-old-policy" is stale.
-			},
-		},
-		{
-			name: "first reconcile without annotation triggers legacy cleanup and sets annotation",
-			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-					return nil // No labeled stale policies.
-				})
-				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
-					// Simulate one legacy NP existing.
-					if ns.Name == "allow-api-server-egress" {
-						if np, ok := obj.(*networkingv1.NetworkPolicy); ok {
-							np.Name = ns.Name
-							np.Namespace = ns.Namespace
-						}
-						return true, nil
-					}
-					return false, nil
-				})
-				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
 					return nil
 				})
 				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 					return nil
 				})
 			},
-			// No annotation on ESC — triggers migration path.
+			// No annotation on ESC — stale policy "eso-user-old-policy" is not in desired set.
+		},
+		{
+			name: "first reconcile with no stale policies sets skip annotation",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+					return nil // No labeled stale policies.
+				})
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					return nil
+				})
+			},
+			// No annotation on ESC — cleanup runs and skip annotation is set.
 		},
 		{
 			name: "List fails returns error",

@@ -231,7 +231,7 @@ func (r *Reconciler) getPodSelectorForComponent(componentName operatorv1alpha1.C
 }
 
 // createOrApplyProxyEgressNetworkPolicy manages the eso-sys-proxy-egress-core NetworkPolicy.
-// It is created when spec.appConfig.proxy.networkPolicyAllowProxyEgressAll is Managed (default)
+// It is created when spec.appConfig.proxy.networkPolicyProvisioning is Managed (default)
 // AND an effective proxy is configured. When either condition is not met, any existing policy
 // is deleted to avoid stale allow rules.
 func (r *Reconciler) createOrApplyProxyEgressNetworkPolicy(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, externalSecretsConfigCreateRecon bool) error {
@@ -240,18 +240,14 @@ func (r *Reconciler) createOrApplyProxyEgressNetworkPolicy(esc *operatorv1alpha1
 	npName := fmt.Sprintf("%s/%s", namespace, proxyEgressNetworkPolicyName)
 
 	if !shouldManageProxyEgress(esc, proxyConfig) {
-		fetched := &networkingv1.NetworkPolicy{}
-		exists, err := r.Exists(r.ctx, types.NamespacedName{Name: proxyEgressNetworkPolicyName, Namespace: namespace}, fetched)
-		if err != nil {
-			return common.FromClientError(err, "failed to check existence of proxy egress network policy %s", npName)
+		r.log.V(1).Info("Proxy egress policy no longer needed, deleting if exists", "name", npName)
+		if err := r.DeleteAllOf(r.ctx, &networkingv1.NetworkPolicy{},
+			client.InNamespace(namespace),
+			client.MatchingFields{"metadata.name": proxyEgressNetworkPolicyName},
+		); err != nil {
+			return common.FromClientError(err, "failed to delete proxy egress network policy %s", npName)
 		}
-		if exists {
-			r.log.V(1).Info("Proxy egress policy no longer needed, deleting", "name", npName)
-			if err := r.Delete(r.ctx, fetched); err != nil {
-				return common.FromClientError(err, "failed to delete proxy egress network policy %s", npName)
-			}
-			r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s deleted", npName)
-		}
+		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s deleted if existed", npName)
 		return nil
 	}
 
@@ -329,8 +325,8 @@ func shouldManageProxyEgress(esc *operatorv1alpha1.ExternalSecretsConfig, proxyC
 		// Proxy came from ESM or OLM env vars; default management mode is Managed.
 		return true
 	}
-	mode := esc.Spec.ApplicationConfig.Proxy.NetworkPolicyAllowProxyEgressAll
-	return mode == "" || mode == operatorv1alpha1.Managed
+	mode := esc.Spec.ApplicationConfig.Proxy.NetworkPolicyProvisioning
+	return mode == "" || mode == operatorv1alpha1.ManagementStateManaged
 }
 
 // getProxyPort extracts the TCP port from the proxy URL.
@@ -362,15 +358,16 @@ func getProxyPort(proxyConfig *operatorv1alpha1.ProxyConfig) int32 {
 }
 
 // cleanupMigratedNetworkPolicies prunes stale operator-managed NetworkPolicies from the operand namespace.
-// On every reconcile it lists all NPs with the operator's managed-by label and deletes any whose name
-// is not in the current desired set (catches entries removed from the CR spec).
-// On the first reconcile after upgrade (no migrationCompleteAnnotation on the CR), it also deletes any
-// legacy NetworkPolicies listed without the label. Once cleanup succeeds, the annotation is set.
+// It lists all NPs with the operator's managed-by label and deletes any whose name is not in the current
+// desired set (catches entries removed from the CR spec). Once cleanup succeeds, the skipNPCleanupAnnotation
+// is written so subsequent reconciles skip the listing round-trip entirely.
 func (r *Reconciler) cleanupMigratedNetworkPolicies(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata) error {
+	if _, skip := esc.GetAnnotations()[skipNPCleanupAnnotation]; skip {
+		return nil
+	}
 	namespace := getNamespace(esc)
 	desired := r.desiredNetworkPolicyNames(esc, r.getProxyConfiguration(esc))
 
-	// Always: label-based list to catch stale entries.
 	labeledList := &networkingv1.NetworkPolicyList{}
 	if err := r.List(r.ctx, labeledList,
 		client.InNamespace(namespace),
@@ -383,20 +380,17 @@ func (r *Reconciler) cleanupMigratedNetworkPolicies(esc *operatorv1alpha1.Extern
 		np := &labeledList.Items[i]
 		if _, ok := desired[np.Name]; !ok {
 			r.log.V(1).Info("Pruning stale network policy", "name", np.Name, "namespace", namespace)
-			if err := r.Delete(r.ctx, np); err != nil {
+			if err := r.DeleteAllOf(r.ctx, &networkingv1.NetworkPolicy{},
+				client.InNamespace(namespace),
+				client.MatchingFields{"metadata.name": np.Name},
+			); err != nil {
 				return common.FromClientError(err, "failed to delete stale network policy %s/%s", namespace, np.Name)
 			}
 		}
 	}
 
-	// First-reconcile migration: clean up legacy unprefixed names that lacked the managed-by label.
-	if _, hasMigration := esc.GetAnnotations()[migrationCompleteAnnotation]; !hasMigration {
-		if err := r.deleteLegacyNetworkPolicies(namespace, desired); err != nil {
-			return err
-		}
-		if err := r.setMigrationCompleteAnnotation(esc); err != nil {
-			return err
-		}
+	if err := r.setSkipNPCleanupAnnotation(esc); err != nil {
+		return err
 	}
 
 	return nil
@@ -441,53 +435,24 @@ func staticNetworkPolicyNames(esc *operatorv1alpha1.ExternalSecretsConfig) map[s
 	return names
 }
 
-// deleteLegacyNetworkPolicies removes legacy NetworkPolicies by name that predate the eso-user- prefix scheme.
-// These NPs were created without the managed-by label so they won't appear in the label-based list.
-func (r *Reconciler) deleteLegacyNetworkPolicies(namespace string, desired map[string]struct{}) error {
-	legacyNames := []string{
-		"deny-all-traffic",
-		"allow-api-server-egress",
-		"allow-api-server-egress-for-webhook",
-		"allow-api-server-egress-for-cert-controller",
-		"allow-api-server-egress-for-bitwarden-sever",
-		"allow-to-dns",
-	}
-	for _, name := range legacyNames {
-		if _, isDesired := desired[name]; isDesired {
-			continue
-		}
-		np := &networkingv1.NetworkPolicy{}
-		exists, err := r.Exists(r.ctx, types.NamespacedName{Name: name, Namespace: namespace}, np)
-		if err != nil {
-			return common.FromClientError(err, "failed to check legacy network policy %s/%s", namespace, name)
-		}
-		if exists {
-			r.log.V(1).Info("Deleting legacy network policy", "name", name, "namespace", namespace)
-			if err := r.Delete(r.ctx, np); err != nil {
-				return common.FromClientError(err, "failed to delete legacy network policy %s/%s", namespace, name)
-			}
-		}
-	}
-	return nil
-}
-
-// setMigrationCompleteAnnotation patches the migrationCompleteAnnotation onto the ExternalSecretsConfig CR.
-func (r *Reconciler) setMigrationCompleteAnnotation(esc *operatorv1alpha1.ExternalSecretsConfig) error {
+// setSkipNPCleanupAnnotation patches the skipNPCleanupAnnotation onto the ExternalSecretsConfig CR.
+// Once set, cleanupMigratedNetworkPolicies skips the label-based list entirely on subsequent reconciles.
+func (r *Reconciler) setSkipNPCleanupAnnotation(esc *operatorv1alpha1.ExternalSecretsConfig) error {
 	patchBody := map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"annotations": map[string]string{
-				migrationCompleteAnnotation: "true",
+				skipNPCleanupAnnotation: "true",
 			},
 		},
 	}
 	patchBytes, err := json.Marshal(patchBody)
 	if err != nil {
-		return fmt.Errorf("failed to marshal migration annotation patch: %w", err)
+		return fmt.Errorf("failed to marshal skip-np-cleanup annotation patch: %w", err)
 	}
 	patch := client.RawPatch(types.MergePatchType, patchBytes)
 	if err := r.Patch(r.ctx, esc, patch, client.FieldOwner(common.ExternalSecretsOperatorCommonName)); err != nil {
-		return common.FromClientError(err, "failed to set migration complete annotation on %s", esc.GetName())
+		return common.FromClientError(err, "failed to set skip-np-cleanup annotation on %s", esc.GetName())
 	}
-	r.log.V(4).Info("Network policy migration annotation set", "name", esc.GetName())
+	r.log.V(4).Info("Network policy skip-cleanup annotation set", "name", esc.GetName())
 	return nil
 }

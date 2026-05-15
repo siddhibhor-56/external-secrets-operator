@@ -25,6 +25,7 @@ type CtrlClient interface {
 	UpdateWithRetry(context.Context, client.Object, ...client.UpdateOption) error
 	Create(context.Context, client.Object, ...client.CreateOption) error
 	Delete(context.Context, client.Object, ...client.DeleteOption) error
+	DeleteAllOf(context.Context, client.Object, ...client.DeleteAllOfOption) error
 	Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error
 	Exists(context.Context, client.ObjectKey, client.Object) (bool, error)
 }
@@ -51,6 +52,12 @@ func (c *CtrlClientImpl) Delete(
 	ctx context.Context, obj client.Object, opts ...client.DeleteOption,
 ) error {
 	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func (c *CtrlClientImpl) DeleteAllOf(
+	ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption,
+) error {
+	return c.Client.DeleteAllOf(ctx, obj, opts...)
 }
 
 func (c *CtrlClientImpl) Update(
