@@ -154,7 +154,7 @@ func externalSecretsExternalSecretsNamespaceYaml() (*asset, error) {
 var _externalSecretsNetworkpolicy_allowApiServerAndWebhookTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-webhook
+  name: eso-sys-allow-api-server-egress-for-webhook
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets-webhook
@@ -204,7 +204,7 @@ func externalSecretsNetworkpolicy_allowApiServerAndWebhookTrafficYaml() (*asset,
 var _externalSecretsNetworkpolicy_allowApiServerEgressForBitwardenSeverYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-bitwarden-server
+  name: eso-sys-allow-api-server-egress-for-bitwarden-server
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: bitwarden-sdk-server
@@ -249,7 +249,7 @@ func externalSecretsNetworkpolicy_allowApiServerEgressForBitwardenSeverYaml() (*
 var _externalSecretsNetworkpolicy_allowApiServerEgressForCertControllerTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-cert-controller
+  name: eso-sys-allow-api-server-egress-for-cert-controller
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
@@ -295,7 +295,7 @@ func externalSecretsNetworkpolicy_allowApiServerEgressForCertControllerTrafficYa
 var _externalSecretsNetworkpolicy_allowApiServerEgressForMainControllerTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-main-controller
+  name: eso-sys-allow-api-server-egress-for-main-controller
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets
@@ -346,7 +346,7 @@ metadata:
     app.kubernetes.io/instance: external-secrets
     app.kubernetes.io/version: "v1.1.0"
     app.kubernetes.io/managed-by: external-secrets-operator
-  name: allow-to-dns
+  name: eso-sys-allow-to-dns
 spec:
   podSelector:
     matchExpressions:
@@ -394,7 +394,7 @@ func externalSecretsNetworkpolicy_allowDnsYaml() (*asset, error) {
 var _externalSecretsNetworkpolicy_denyAllYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-all-traffic
+  name: eso-sys-deny-all-traffic
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets
