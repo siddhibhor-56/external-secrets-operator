@@ -112,7 +112,7 @@ type ProxyConfig struct {
 	// +optional
 	NoProxy string `json:"noProxy,omitempty"`
 
-	// networkPolicyAllowProxyEgressAll controls whether the operator automatically creates a NetworkPolicy
+	// networkPolicyProvisioning controls whether the operator automatically creates a NetworkPolicy
 	// that allows ESO pods to reach the proxy server configured on the cluster.
 	// Managed (default): the operator creates and maintains the eso-sys-proxy-egress-core NetworkPolicy
 	// whenever an effective proxy is configured via getProxyConfiguration().
@@ -122,18 +122,18 @@ type ProxyConfig struct {
 	// +kubebuilder:validation:Enum:=Managed;Unmanaged
 	// +kubebuilder:default:=Managed
 	// +optional
-	NetworkPolicyAllowProxyEgressAll NetworkPolicyManagementMode `json:"networkPolicyAllowProxyEgressAll,omitempty"`
+	NetworkPolicyProvisioning ManagementState `json:"networkPolicyProvisioning,omitempty"`
 }
 
-// NetworkPolicyManagementMode indicates whether the operator manages a NetworkPolicy automatically.
-type NetworkPolicyManagementMode string
+// ManagementState indicates whether the operator manages a resource lifecycle automatically.
+type ManagementState string
 
 const (
-	// Managed indicates the operator creates and maintains the NetworkPolicy automatically.
-	Managed NetworkPolicyManagementMode = "Managed"
+	// ManagementStateManaged indicates the operator creates and maintains the resource automatically.
+	ManagementStateManaged ManagementState = "Managed"
 
-	// Unmanaged indicates the operator does not create the NetworkPolicy; the administrator manages it.
-	Unmanaged NetworkPolicyManagementMode = "Unmanaged"
+	// ManagementStateUnmanaged indicates the operator does not manage the resource; the administrator is responsible.
+	ManagementStateUnmanaged ManagementState = "Unmanaged"
 )
 
 // Mode indicates the operational state of the optional features.
