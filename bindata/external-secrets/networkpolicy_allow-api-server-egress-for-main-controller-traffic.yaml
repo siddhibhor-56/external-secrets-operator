@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-main-controller
+  name: eso-sys-allow-api-server-egress-for-main-controller
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets
