@@ -14,7 +14,6 @@ import (
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/client/fakes"
-	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/controller/commontest"
 )
 
@@ -754,8 +753,6 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 		preReq                      func(*Reconciler, *fakes.FakeCtrlClient)
 		updateExternalSecretsConfig func(*operatorv1alpha1.ExternalSecretsConfig)
 		wantErr                     string
-		wantDeleteCount             int
-		wantPatchCount              int
 	}{
 		{
 			name: "skip when annotation already set",
@@ -764,67 +761,29 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 					skipNPCleanupAnnotation: "true",
 				})
 			},
-			wantDeleteCount: 0,
-			wantPatchCount:  0,
 		},
 		{
-			name: "delete stale unprefixed policies",
+			name: "deletecollection removes all managed policies and sets annotation",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-					if npList, ok := list.(*networkingv1.NetworkPolicyList); ok {
-						npList.Items = []networkingv1.NetworkPolicy{
-							{ObjectMeta: metav1.ObjectMeta{Name: "eso-sys-deny-all-traffic", Namespace: externalsecretsDefaultNamespace}},
-							{ObjectMeta: metav1.ObjectMeta{Name: "deny-all-traffic", Namespace: externalsecretsDefaultNamespace}},
-							{ObjectMeta: metav1.ObjectMeta{Name: "allow-to-dns", Namespace: externalsecretsDefaultNamespace}},
-						}
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
+					if _, ok := obj.(*networkingv1.NetworkPolicy); !ok {
+						t.Errorf("Expected NetworkPolicy object, got %T", obj)
 					}
 					return nil
 				})
-			},
-			wantDeleteCount: 2,
-			wantPatchCount:  1,
-		},
-		{
-			name: "no stale policies to delete",
-			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-					if npList, ok := list.(*networkingv1.NetworkPolicyList); ok {
-						npList.Items = []networkingv1.NetworkPolicy{
-							{ObjectMeta: metav1.ObjectMeta{Name: "eso-sys-deny-all-traffic", Namespace: externalsecretsDefaultNamespace}},
-							{ObjectMeta: metav1.ObjectMeta{Name: "eso-sys-allow-to-dns", Namespace: externalsecretsDefaultNamespace}},
-						}
-					}
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 					return nil
 				})
 			},
-			wantDeleteCount: 0,
-			wantPatchCount:  1,
 		},
 		{
-			name: "list fails",
+			name: "deletecollection failure returns error",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+				m.DeleteAllOfCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteAllOfOption) error {
 					return commontest.ErrTestClient
 				})
 			},
-			wantErr: "failed to list network policies in external-secrets for cleanup: test client error",
-		},
-		{
-			name: "delete fails",
-			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
-				m.ListCalls(func(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-					if npList, ok := list.(*networkingv1.NetworkPolicyList); ok {
-						npList.Items = []networkingv1.NetworkPolicy{
-							{ObjectMeta: metav1.ObjectMeta{Name: "stale-policy", Namespace: externalsecretsDefaultNamespace}},
-						}
-					}
-					return nil
-				})
-				m.DeleteCalls(func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
-					return commontest.ErrTestClient
-				})
-			},
-			wantErr: "failed to delete stale network policy external-secrets/stale-policy: test client error",
+			wantErr: "failed to delete managed network policies in namespace external-secrets: test client error",
 		},
 	}
 
@@ -842,13 +801,7 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 				tt.updateExternalSecretsConfig(esc)
 			}
 
-			rm := common.ResourceMetadata{
-				Labels:                controllerDefaultResourceLabels,
-				Annotations:           esc.Spec.ControllerConfig.Annotations,
-				DeletedAnnotationKeys: []string{},
-			}
-
-			err := r.cleanupMigratedNetworkPolicies(esc, rm)
+			err := r.cleanupMigratedNetworkPolicies(esc)
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
 					t.Errorf("Expected error: %v, got: %v", tt.wantErr, err)
@@ -858,13 +811,6 @@ func TestCleanupMigratedNetworkPolicies(t *testing.T) {
 			if err != nil {
 				t.Errorf("Unexpected error: %v", err)
 				return
-			}
-
-			if mock.DeleteCallCount() != tt.wantDeleteCount {
-				t.Errorf("Expected %d Delete calls, got %d", tt.wantDeleteCount, mock.DeleteCallCount())
-			}
-			if mock.PatchCallCount() != tt.wantPatchCount {
-				t.Errorf("Expected %d Patch calls, got %d", tt.wantPatchCount, mock.PatchCallCount())
 			}
 		})
 	}

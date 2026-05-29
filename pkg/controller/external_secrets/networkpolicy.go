@@ -35,7 +35,7 @@ func (r *Reconciler) createOrApplyNetworkPolicies(esc *operatorv1alpha1.External
 		return err
 	}
 
-	if err := r.cleanupMigratedNetworkPolicies(esc, resourceMetadata); err != nil {
+	if err := r.cleanupMigratedNetworkPolicies(esc); err != nil {
 		return err
 	}
 
@@ -361,78 +361,37 @@ func extractProxyPort(proxyConfig *operatorv1alpha1.ProxyConfig) (int, error) {
 	return 3128, nil
 }
 
-// desiredNetworkPolicyNames returns the set of Kubernetes NetworkPolicy object names that
-// should exist for the current configuration. Used by cleanupMigratedNetworkPolicies to
-// identify stale objects.
-func (r *Reconciler) desiredNetworkPolicyNames(esc *operatorv1alpha1.ExternalSecretsConfig) map[string]struct{} {
-	desired := map[string]struct{}{}
-	staticAssets := []struct {
-		assetName string
-		condition bool
-	}{
-		{denyAllNetworkPolicyAssetName, true},
-		{allowMainControllerTrafficAssetName, true},
-		{allowWebhookTrafficAssetName, true},
-		{allowCertControllerTrafficAssetName, !isCertManagerConfigEnabled(esc)},
-		{allowBitwardenServerTrafficAssetName, isBitwardenConfigEnabled(esc)},
-		{allowDnsTrafficAssetName, true},
-	}
-	for _, s := range staticAssets {
-		if s.condition {
-			np := common.DecodeNetworkPolicyObjBytes(assets.MustAsset(s.assetName))
-			desired[np.GetName()] = struct{}{}
-		}
-	}
-
-	proxyConfig := r.getProxyConfiguration(esc)
-	if proxyConfig != nil && getNetworkPolicyProvisioning(proxyConfig) == operatorv1alpha1.ManagementStateManaged {
-		desired[proxyEgressPolicyName] = struct{}{}
-	}
-
-	for _, npConfig := range esc.Spec.ControllerConfig.NetworkPolicies {
-		desired[userNetworkPolicyPrefix+npConfig.Name] = struct{}{}
-	}
-	return desired
-}
-
-// cleanupMigratedNetworkPolicies removes NetworkPolicy objects that are owned by the operator
-// (identified by the managed-by label) but are not in the current desired set. This handles
-// the migration from unprefixed names (pre-1.2.0) to the eso-sys-/eso-user- naming scheme
-// and also prunes stale user NPs that have been removed from the CR spec.
+// cleanupMigratedNetworkPolicies removes all operator-managed NetworkPolicy objects
+// using deletecollection. The desired policies (created earlier in the reconcile loop)
+// are recreated on the next reconcile.
 //
-// The cleanup runs only once per CR lifetime: after a successful pass the
-// skipNPCleanupAnnotation is written to the CR so subsequent reconciles skip the loop.
-func (r *Reconciler) cleanupMigratedNetworkPolicies(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata) error {
+// On each reconcile it operates as follows:
+// 1. Check whether the skip-np-cleanup-check annotation is present on the ESC CR.
+//    If present, skip the cleanup.
+// 2. If absent, delete all NetworkPolicies matching the operator labels using DeleteAllOf.
+// 3. After deletion succeeds, write the skip annotation onto the ESC CR.
+func (r *Reconciler) cleanupMigratedNetworkPolicies(esc *operatorv1alpha1.ExternalSecretsConfig) error {
 	if esc.GetAnnotations()[skipNPCleanupAnnotation] == "true" {
 		return nil
 	}
 
 	namespace := getNamespace(esc)
-	desired := r.desiredNetworkPolicyNames(esc)
+	r.log.V(1).Info("Running NetworkPolicy migration cleanup", "namespace", namespace)
 
-	var npList networkingv1.NetworkPolicyList
-	listOpts := []client.ListOption{
+	deleteOpts := []client.DeleteAllOfOption{
 		client.InNamespace(namespace),
 		client.MatchingLabels{
 			"app.kubernetes.io/managed-by": common.ExternalSecretsOperatorCommonName,
 			"app.kubernetes.io/part-of":    common.ExternalSecretsOperatorCommonName,
 		},
 	}
-	if err := r.List(r.ctx, &npList, listOpts...); err != nil {
-		return common.FromClientError(err, "failed to list network policies in %s for cleanup", namespace)
+
+	if err := r.DeleteAllOf(r.ctx, &networkingv1.NetworkPolicy{}, deleteOpts...); err != nil {
+		return common.FromClientError(err, "failed to delete managed network policies in namespace %s", namespace)
 	}
 
-	for i := range npList.Items {
-		np := &npList.Items[i]
-		if _, ok := desired[np.GetName()]; ok {
-			continue
-		}
-		r.log.V(1).Info("deleting stale/unprefixed network policy", "name", np.GetName(), "namespace", namespace)
-		if err := r.Delete(r.ctx, np); err != nil {
-			return common.FromClientError(err, "failed to delete stale network policy %s/%s", namespace, np.GetName())
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "stale NetworkPolicy %s/%s removed", namespace, np.GetName())
-	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "MigrationCleanup", "Deleted all managed NetworkPolicies in %s via deletecollection", namespace)
+	r.log.V(1).Info("Migration cleanup completed", "namespace", namespace)
 
 	return r.markCleanupDone(esc)
 }

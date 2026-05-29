@@ -36,6 +36,19 @@ type FakeCtrlClient struct {
 	deleteReturnsOnCall map[int]struct {
 		result1 error
 	}
+	DeleteAllOfStub        func(context.Context, clienta.Object, ...clienta.DeleteAllOfOption) error
+	deleteAllOfMutex       sync.RWMutex
+	deleteAllOfArgsForCall []struct {
+		arg1 context.Context
+		arg2 clienta.Object
+		arg3 []clienta.DeleteAllOfOption
+	}
+	deleteAllOfReturns struct {
+		result1 error
+	}
+	deleteAllOfReturnsOnCall map[int]struct {
+		result1 error
+	}
 	ExistsStub        func(context.Context, clienta.ObjectKey, clienta.Object) (bool, error)
 	existsMutex       sync.RWMutex
 	existsArgsForCall []struct {
@@ -256,6 +269,69 @@ func (fake *FakeCtrlClient) DeleteReturnsOnCall(i int, result1 error) {
 		})
 	}
 	fake.deleteReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeCtrlClient) DeleteAllOf(arg1 context.Context, arg2 clienta.Object, arg3 ...clienta.DeleteAllOfOption) error {
+	fake.deleteAllOfMutex.Lock()
+	ret, specificReturn := fake.deleteAllOfReturnsOnCall[len(fake.deleteAllOfArgsForCall)]
+	fake.deleteAllOfArgsForCall = append(fake.deleteAllOfArgsForCall, struct {
+		arg1 context.Context
+		arg2 clienta.Object
+		arg3 []clienta.DeleteAllOfOption
+	}{arg1, arg2, arg3})
+	stub := fake.DeleteAllOfStub
+	fakeReturns := fake.deleteAllOfReturns
+	fake.recordInvocation("DeleteAllOf", []interface{}{arg1, arg2, arg3})
+	fake.deleteAllOfMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3...)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fakeReturns.result1
+}
+
+func (fake *FakeCtrlClient) DeleteAllOfCallCount() int {
+	fake.deleteAllOfMutex.RLock()
+	defer fake.deleteAllOfMutex.RUnlock()
+	return len(fake.deleteAllOfArgsForCall)
+}
+
+func (fake *FakeCtrlClient) DeleteAllOfCalls(stub func(context.Context, clienta.Object, ...clienta.DeleteAllOfOption) error) {
+	fake.deleteAllOfMutex.Lock()
+	defer fake.deleteAllOfMutex.Unlock()
+	fake.DeleteAllOfStub = stub
+}
+
+func (fake *FakeCtrlClient) DeleteAllOfArgsForCall(i int) (context.Context, clienta.Object, []clienta.DeleteAllOfOption) {
+	fake.deleteAllOfMutex.RLock()
+	defer fake.deleteAllOfMutex.RUnlock()
+	argsForCall := fake.deleteAllOfArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+}
+
+func (fake *FakeCtrlClient) DeleteAllOfReturns(result1 error) {
+	fake.deleteAllOfMutex.Lock()
+	defer fake.deleteAllOfMutex.Unlock()
+	fake.DeleteAllOfStub = nil
+	fake.deleteAllOfReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *FakeCtrlClient) DeleteAllOfReturnsOnCall(i int, result1 error) {
+	fake.deleteAllOfMutex.Lock()
+	defer fake.deleteAllOfMutex.Unlock()
+	fake.DeleteAllOfStub = nil
+	if fake.deleteAllOfReturnsOnCall == nil {
+		fake.deleteAllOfReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.deleteAllOfReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
 }
@@ -708,24 +784,6 @@ func (fake *FakeCtrlClient) UpdateWithRetryReturnsOnCall(i int, result1 error) {
 func (fake *FakeCtrlClient) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
-	fake.createMutex.RLock()
-	defer fake.createMutex.RUnlock()
-	fake.deleteMutex.RLock()
-	defer fake.deleteMutex.RUnlock()
-	fake.existsMutex.RLock()
-	defer fake.existsMutex.RUnlock()
-	fake.getMutex.RLock()
-	defer fake.getMutex.RUnlock()
-	fake.listMutex.RLock()
-	defer fake.listMutex.RUnlock()
-	fake.patchMutex.RLock()
-	defer fake.patchMutex.RUnlock()
-	fake.statusUpdateMutex.RLock()
-	defer fake.statusUpdateMutex.RUnlock()
-	fake.updateMutex.RLock()
-	defer fake.updateMutex.RUnlock()
-	fake.updateWithRetryMutex.RLock()
-	defer fake.updateWithRetryMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
 	for key, value := range fake.invocations {
 		copiedInvocations[key] = value
