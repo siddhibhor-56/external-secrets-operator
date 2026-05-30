@@ -784,29 +784,32 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
-		It("should set the skip-np-cleanup-check annotation on ExternalSecretsConfig after migration", func() {
-			By("Verifying the cleanup annotation is present on the CR")
-			Eventually(func(g Gomega) {
-				esc := &operatorv1alpha1.ExternalSecretsConfig{}
-				g.Expect(runtimeClient.Get(ctx, client.ObjectKey{Name: "cluster"}, esc)).To(Succeed())
+		// TODO(siddhibhor-56,ESO-v1.4.0): Remove this test case after 3 releases once the migration from
+		// unprefixed to eso-sys-/eso-user- network policy names is no longer needed.
+		It("should set the skip-np-cleanup-check annotation on ExternalSecretsConfig after migration",
+			Label("Migration", "PostUpgradeCheck"), func() {
+				By("Verifying the cleanup annotation is present on the CR")
+				Eventually(func(g Gomega) {
+					esc := &operatorv1alpha1.ExternalSecretsConfig{}
+					g.Expect(runtimeClient.Get(ctx, client.ObjectKey{Name: "cluster"}, esc)).To(Succeed())
 
-				annotations := esc.GetAnnotations()
-				g.Expect(annotations).To(HaveKeyWithValue(
-					"externalsecretsconfig.operator.openshift.io/skip-np-cleanup-check", "true"),
-					"ExternalSecretsConfig should have the skip-np-cleanup-check annotation after migration cleanup")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+					annotations := esc.GetAnnotations()
+					g.Expect(annotations).To(HaveKeyWithValue(
+						"externalsecretsconfig.operator.openshift.io/skip-np-cleanup-check", "true"),
+						"ExternalSecretsConfig should have the skip-np-cleanup-check annotation after migration cleanup")
+				}, 2*time.Minute, 5*time.Second).Should(Succeed())
 
-			By("Verifying all managed network policies use the eso-sys- or eso-user- prefix")
-			nps, err := listManagedNetworkPolicies(ctx, operandNamespace)
-			Expect(err).NotTo(HaveOccurred())
+				By("Verifying all managed network policies use the eso-sys- or eso-user- prefix")
+				nps, err := listManagedNetworkPolicies(ctx, operandNamespace)
+				Expect(err).NotTo(HaveOccurred())
 
-			for _, np := range nps {
-				Expect(np.Name).To(SatisfyAny(
-					HavePrefix("eso-sys-"),
-					HavePrefix("eso-user-"),
-				), "managed network policy %s should have eso-sys- or eso-user- prefix after migration", np.Name)
-			}
-		})
+				for _, np := range nps {
+					Expect(np.Name).To(SatisfyAny(
+						HavePrefix("eso-sys-"),
+						HavePrefix("eso-user-"),
+					), "managed network policy %s should have eso-sys- or eso-user- prefix after migration", np.Name)
+				}
+			})
 	})
 
 	Context("Custom Network Policy Naming", func() {
