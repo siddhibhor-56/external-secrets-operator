@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/client/fakes"
@@ -436,6 +437,72 @@ func TestUpdateWatchLabel(t *testing.T) {
 			}
 			if tt.wantPatch && !patched {
 				t.Fatal("expected Patch to be called")
+			}
+		})
+	}
+}
+
+func TestLabelMatchPredicateUpdate(t *testing.T) {
+	t.Parallel()
+
+	watchLabels := map[string]string{WatchedResourceLabelKey: WatchedResourceLabelValue}
+	managedLabels := map[string]string{ManagedResourceLabelKey: ManagedResourceLabelValue}
+
+	tests := []struct {
+		name      string
+		oldLabels map[string]string
+		newLabels map[string]string
+		want      bool
+	}{
+		{
+			name:      "both old and new watched",
+			oldLabels: watchLabels,
+			newLabels: watchLabels,
+			want:      true,
+		},
+		{
+			name:      "old watched only",
+			oldLabels: watchLabels,
+			newLabels: map[string]string{"foo": "bar"},
+			want:      true,
+		},
+		{
+			name:      "new watched only",
+			oldLabels: nil,
+			newLabels: watchLabels,
+			want:      true,
+		},
+		{
+			name:      "neither watched",
+			oldLabels: map[string]string{"foo": "bar"},
+			newLabels: map[string]string{"foo": "bar"},
+			want:      false,
+		},
+		{
+			name:      "managed label on old only",
+			oldLabels: managedLabels,
+			newLabels: map[string]string{"foo": "bar"},
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			updateEvent := event.UpdateEvent{
+				ObjectOld: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Labels: tt.oldLabels}},
+				ObjectNew: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Labels: tt.newLabels}},
+			}
+
+			gotManaged := labelMatchPredicate(isManagedResource).Update(updateEvent)
+			wantManaged := isManagedResource(updateEvent.ObjectOld) || isManagedResource(updateEvent.ObjectNew)
+			if gotManaged != wantManaged {
+				t.Fatalf("managed Update() = %v, want %v", gotManaged, wantManaged)
+			}
+
+			gotManagedOrWatched := labelMatchPredicate(isManagedOrWatchedResource).Update(updateEvent)
+			if gotManagedOrWatched != tt.want {
+				t.Fatalf("managedOrWatched Update() = %v, want %v", gotManagedOrWatched, tt.want)
 			}
 		})
 	}
