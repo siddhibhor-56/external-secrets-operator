@@ -16,6 +16,8 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.uber.org/zap/zapcore"
 
@@ -262,8 +264,49 @@ func (r *Reconciler) isProxyEnabled() bool {
 // hasManagedOrWatchLabel reports whether labels identify an operand resource created
 // by the operator or a user configured resource that the operator watches.
 func hasManagedOrWatchLabel(labels map[string]string) bool {
+	if labels == nil {
+		return false
+	}
 	return labels[ManagedResourceLabelKey] == ManagedResourceLabelValue ||
 		labels[WatchedResourceLabelKey] == WatchedResourceLabelValue
+}
+
+// isManagedResource reports whether object is an operator-managed operand resource.
+func isManagedResource(object client.Object) bool {
+	if object == nil {
+		return false
+	}
+	labels := object.GetLabels()
+	return labels != nil && labels[ManagedResourceLabelKey] == ManagedResourceLabelValue
+}
+
+// isManagedOrWatchedResource reports whether object is an operator-managed operand or a
+// user-provided resource labeled for passive watch (e.g. trustedCABundle ConfigMaps).
+func isManagedOrWatchedResource(object client.Object) bool {
+	if object == nil {
+		return false
+	}
+	return hasManagedOrWatchLabel(object.GetLabels())
+}
+
+// labelMatchPredicate returns predicate.Funcs that admit events when match returns true for
+// the event object(s). On updates both old and new are checked so reconciliation still runs
+// when a matching label is removed externally.
+func labelMatchPredicate(match func(client.Object) bool) predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return match(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return match(e.ObjectOld) || match(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return match(e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return match(e.Object)
+		},
+	}
 }
 
 // getWithCacheFallback reads a resource from the manager cache first. On IsNotFound it

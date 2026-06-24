@@ -40,7 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -286,36 +285,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []reconcile.Request{}
 	}
 
-	// On updates, check both old and new objects so that events where the managed
-	// label is removed externally still trigger reconciliation and label restoration.
-	isManagedResource := func(object client.Object) bool {
-		labels := object.GetLabels()
-		return labels != nil && labels[ManagedResourceLabelKey] == ManagedResourceLabelValue
-	}
-	managedResources := predicate.Funcs{
-		CreateFunc: func(e event.CreateEvent) bool {
-			return isManagedResource(e.Object)
-		},
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			return isManagedResource(e.ObjectOld) || isManagedResource(e.ObjectNew)
-		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			return isManagedResource(e.Object)
-		},
-		GenericFunc: func(e event.GenericEvent) bool {
-			return isManagedResource(e.Object)
-		},
-	}
+	// managedResources limits enqueues to operator-managed operand resources (app=external-secrets).
+	managedResources := labelMatchPredicate(isManagedResource)
 
-	// managedOrWatchedResources limits enqueues to operator-managed resources (app=external-secrets) and
-	// user referenced resources (like ConfigMaps) having the watch label (externalsecretsconfig.operator.openshift.io/watching)
-	// so unrelated resource changes do not trigger reconciliation.
-	managedOrWatchedResources := predicate.NewPredicateFuncs(func(object client.Object) bool {
-		if object.GetLabels() == nil {
-			return false
-		}
-		return hasManagedOrWatchLabel(object.GetLabels())
-	})
+	// managedOrWatchedResources also admits user referenced resources (like trustedCABundle
+	// ConfigMaps) labeled externalsecretsconfig.operator.openshift.io/watching.
+	managedOrWatchedResources := labelMatchPredicate(isManagedOrWatchedResource)
 
 	// Resources like Deployments are reconciled on spec generation or managed-label changes.
 	withIgnoreStatusUpdatePredicates := builder.WithPredicates(
