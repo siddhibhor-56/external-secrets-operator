@@ -27,11 +27,15 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -56,6 +60,7 @@ var _ = Describe("ESO Extended Tests Multiple Providers", Label("OpenShiftTestsP
 		providerClientset     *kubernetes.Clientset
 		providerDynamicClient *dynamic.DynamicClient
 		providerRuntimeClient client.Client
+		providerCfg           *rest.Config
 		providerLoader        utils.DynamicResourceLoader
 		providerTestNamespace string
 	)
@@ -76,6 +81,7 @@ var _ = Describe("ESO Extended Tests Multiple Providers", Label("OpenShiftTestsP
 		providerClientset = suiteClientset
 		providerDynamicClient = suiteDynamicClient
 		providerRuntimeClient = suiteRuntimeClient
+		providerCfg = cfg
 		providerLoader = utils.NewDynamicResourceLoader(ctx, &testing.T{})
 
 		namespace := &corev1.Namespace{
@@ -484,6 +490,234 @@ var _ = Describe("ESO Extended Tests Multiple Providers", Label("OpenShiftTestsP
 				secret, err := providerClientset.CoreV1().Secrets(providerTestNamespace).Get(ctx, targetSecret, metav1.GetOptions{})
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(string(secret.Data[secretKey])).To(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(updatedValue))))
+			}, 2*time.Minute, 10*time.Second).Should(Succeed())
+		})
+	})
+
+	// ──────────────────────────────────────────────────────────────────
+	// Context: Vault
+	// ──────────────────────────────────────────────────────────────────
+
+	Context("Vault", Label("Vault"), func() {
+		const (
+			vaultTokenSecretName  = "vault-token-e2e"
+			vaultEgressPolicyName = "e2e-vault-egress"
+		)
+		var (
+			vaultPodName string
+			vaultAddr    string
+			vaultCleanup func()
+		)
+
+		BeforeAll(func() {
+			By("Adding Vault egress NetworkPolicy to ExternalSecretsConfig")
+			tcp := corev1.ProtocolTCP
+			vaultPort := intstr.FromInt32(8200)
+			err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				currentCR := &operatorv1alpha1.ExternalSecretsConfig{}
+				if err := providerRuntimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, currentCR); err != nil {
+					return err
+				}
+				for _, np := range currentCR.Spec.ControllerConfig.NetworkPolicies {
+					if np.Name == vaultEgressPolicyName {
+						return nil
+					}
+				}
+				currentCR.Spec.ControllerConfig.NetworkPolicies = append(
+					currentCR.Spec.ControllerConfig.NetworkPolicies,
+					operatorv1alpha1.NetworkPolicy{
+						Name:          vaultEgressPolicyName,
+						ComponentName: operatorv1alpha1.CoreController,
+						Egress: []networkingv1.NetworkPolicyEgressRule{
+							{
+								To: []networkingv1.NetworkPolicyPeer{
+									{
+										NamespaceSelector: &metav1.LabelSelector{
+											MatchLabels: map[string]string{"e2e-test": "true"},
+										},
+										PodSelector: &metav1.LabelSelector{
+											MatchLabels: map[string]string{"app": "vault-dev"},
+										},
+									},
+								},
+								Ports: []networkingv1.NetworkPolicyPort{
+									{Protocol: &tcp, Port: &vaultPort},
+								},
+							},
+						},
+					},
+				)
+				return providerRuntimeClient.Update(ctx, currentCR)
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for Vault egress NetworkPolicy to be created")
+			expectedNPName := userNPPrefix + vaultEgressPolicyName
+			Eventually(func(g Gomega) {
+				_, err := providerClientset.NetworkingV1().NetworkPolicies(operandNamespace).Get(ctx, expectedNPName, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Deploying Vault dev server")
+			vaultPodName, vaultAddr, vaultCleanup, err = utils.DeployVaultDevServer(ctx, providerClientset, providerTestNamespace)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Creating Vault token k8s secret")
+			Expect(utils.CreateVaultTokenSecret(ctx, providerClientset, providerTestNamespace, vaultTokenSecretName)).To(Succeed())
+		})
+
+		AfterAll(func() {
+			if vaultCleanup != nil {
+				By("Cleaning up Vault dev server")
+				vaultCleanup()
+			}
+
+			By("Removing Vault egress NetworkPolicy from ExternalSecretsConfig")
+			_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				currentCR := &operatorv1alpha1.ExternalSecretsConfig{}
+				if err := providerRuntimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, currentCR); err != nil {
+					return err
+				}
+				filtered := currentCR.Spec.ControllerConfig.NetworkPolicies[:0]
+				for _, np := range currentCR.Spec.ControllerConfig.NetworkPolicies {
+					if np.Name != vaultEgressPolicyName {
+						filtered = append(filtered, np)
+					}
+				}
+				currentCR.Spec.ControllerConfig.NetworkPolicies = filtered
+				return providerRuntimeClient.Update(ctx, currentCR)
+			})
+		})
+
+		// OCP-80711: Sync and re-sync from Vault
+		It("[OCP-80711] should sync and re-sync secrets from Vault", func() {
+			var (
+				storeName    = "secretstore-80711"
+				esName       = "externalsecret-80711"
+				targetSecret = "secret-from-vault-80711"
+				vaultPath    = "e2e-80711"
+				secretKey    = "password"
+				initialValue = utils.GetRandomString(8)
+				updatedValue = utils.GetRandomString(8)
+			)
+
+			By("Writing initial secret to Vault")
+			Expect(utils.WriteVaultKVSecret(ctx, providerCfg, providerClientset, providerTestNamespace, vaultPodName, vaultPath, secretKey, initialValue)).To(Succeed())
+
+			By("Creating SecretStore for Vault")
+			store := utils.VaultSecretStore(storeName, providerTestNamespace, vaultAddr, vaultTokenSecretName)
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(store, providerTestNamespace)).To(Succeed())
+			defer providerLoader.DeleteFromUnstructured(store, providerTestNamespace)
+
+			By("Waiting for SecretStore to become Ready")
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, secretStoreGVR, providerTestNamespace, storeName, 2*time.Minute)).To(Succeed())
+
+			By("Creating ExternalSecret for Vault")
+			es := utils.AWSExternalSecret(esName, providerTestNamespace, storeName, targetSecret, "10s", vaultPath, secretKey, secretKey)
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(es, providerTestNamespace)).To(Succeed())
+			defer providerLoader.DeleteFromUnstructured(es, providerTestNamespace)
+
+			By("Waiting for ExternalSecret to become Ready")
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, externalSecretGVR, providerTestNamespace, esName, 2*time.Minute)).To(Succeed())
+
+			By("Verifying initial secret value")
+			Eventually(func(g Gomega) {
+				secret, err := providerClientset.CoreV1().Secrets(providerTestNamespace).Get(ctx, targetSecret, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(string(secret.Data[secretKey])).To(Equal(initialValue))
+			}, time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Updating the Vault secret")
+			Expect(utils.WriteVaultKVSecret(ctx, providerCfg, providerClientset, providerTestNamespace, vaultPodName, vaultPath, secretKey, updatedValue)).To(Succeed())
+
+			By("Waiting for k8s secret to reflect updated value")
+			Eventually(func(g Gomega) {
+				secret, err := providerClientset.CoreV1().Secrets(providerTestNamespace).Get(ctx, targetSecret, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(string(secret.Data[secretKey])).To(Equal(updatedValue))
+			}, 2*time.Minute, 10*time.Second).Should(Succeed())
+		})
+
+		// OCP-81818: Back up Vault secret to AWS Parameter Store
+		It("[OCP-81818] should back up Vault secret to AWS Parameter Store", Label("Platform:AWS"), func() {
+			const awsCredsLocalName = "aws-creds-vault"
+			var (
+				vaultStoreName = "secretstore-vault-81818"
+				vaultESName    = "externalsecret-81818"
+				vaultTarget    = "secret-from-vault-81818"
+				vaultPath      = "e2e-81818"
+				secretKey      = "password"
+				initialValue   = utils.GetRandomString(8)
+				updatedValue   = utils.GetRandomString(8)
+
+				awsStoreName = "secretstore-aws-81818"
+				psName       = "pushsecret-81818"
+				paramName    = fmt.Sprintf("eso-e2e-81818-%s", utils.GetRandomString(5))
+			)
+
+			By("Writing initial secret to Vault")
+			Expect(utils.WriteVaultKVSecret(ctx, providerCfg, providerClientset, providerTestNamespace, vaultPodName, vaultPath, secretKey, initialValue)).To(Succeed())
+
+			By("Creating Vault SecretStore and ExternalSecret")
+			vaultStore := utils.VaultSecretStore(vaultStoreName, providerTestNamespace, vaultAddr, vaultTokenSecretName)
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(vaultStore, providerTestNamespace)).To(Succeed())
+			defer providerLoader.DeleteFromUnstructured(vaultStore, providerTestNamespace)
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, secretStoreGVR, providerTestNamespace, vaultStoreName, 2*time.Minute)).To(Succeed())
+
+			vaultES := utils.AWSExternalSecret(vaultESName, providerTestNamespace, vaultStoreName, vaultTarget, "10s", vaultPath, secretKey, secretKey)
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(vaultES, providerTestNamespace)).To(Succeed())
+			defer providerLoader.DeleteFromUnstructured(vaultES, providerTestNamespace)
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, externalSecretGVR, providerTestNamespace, vaultESName, 2*time.Minute)).To(Succeed())
+
+			By("Verifying Vault secret synced to k8s")
+			Eventually(func(g Gomega) {
+				secret, err := providerClientset.CoreV1().Secrets(providerTestNamespace).Get(ctx, vaultTarget, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(string(secret.Data[secretKey])).To(Equal(initialValue))
+			}, time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Copying AWS credentials for PushSecret")
+			_ = utils.CopyAWSCredsToNamespace(ctx, providerClientset, providerTestNamespace, awsCredsLocalName)
+
+			By("Creating AWS Parameter Store SecretStore")
+			awsStore := utils.AWSSecretStore(awsStoreName, providerTestNamespace, awsRegion, "ParameterStore", awsCredsLocalName)
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(awsStore, providerTestNamespace)).To(Succeed())
+			defer providerLoader.DeleteFromUnstructured(awsStore, providerTestNamespace)
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, secretStoreGVR, providerTestNamespace, awsStoreName, 2*time.Minute)).To(Succeed())
+
+			By("Creating PushSecret to push the synced Vault secret to AWS PS")
+			ps := utils.AWSPushSecretKey(psName, providerTestNamespace, awsStoreName, vaultTarget, secretKey, paramName, "10s")
+			Expect(providerLoader.CreateFromUnstructuredReturnErr(ps, providerTestNamespace)).To(Succeed())
+			defer func() {
+				providerLoader.DeleteFromUnstructured(ps, providerTestNamespace)
+				_ = utils.DeleteAWSSSMParameter(ctx, providerClientset, paramName, awsRegion)
+			}()
+
+			By("Waiting for PushSecret to become Ready")
+			Expect(utils.WaitForESOResourceReady(ctx, providerDynamicClient, pushSecretGVR, providerTestNamespace, psName, 2*time.Minute)).To(Succeed())
+
+			By("Verifying value in AWS Parameter Store")
+			Eventually(func(g Gomega) {
+				val, err := utils.GetAWSSSMParameter(ctx, providerClientset, paramName, awsRegion)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(val).To(ContainSubstring(initialValue))
+			}, time.Minute, 10*time.Second).Should(Succeed())
+
+			By("Updating the Vault secret")
+			Expect(utils.WriteVaultKVSecret(ctx, providerCfg, providerClientset, providerTestNamespace, vaultPodName, vaultPath, secretKey, updatedValue)).To(Succeed())
+
+			By("Waiting for k8s secret to reflect updated Vault value")
+			Eventually(func(g Gomega) {
+				secret, err := providerClientset.CoreV1().Secrets(providerTestNamespace).Get(ctx, vaultTarget, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(string(secret.Data[secretKey])).To(Equal(updatedValue))
+			}, 2*time.Minute, 10*time.Second).Should(Succeed())
+
+			By("Verifying AWS Parameter Store also reflects the updated value")
+			Eventually(func(g Gomega) {
+				val, err := utils.GetAWSSSMParameter(ctx, providerClientset, paramName, awsRegion)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(val).To(ContainSubstring(updatedValue))
 			}, 2*time.Minute, 10*time.Second).Should(Succeed())
 		})
 	})
