@@ -70,9 +70,12 @@ const (
 // "token" matches the official external-secrets.io Bitwarden provider example.
 const TokenSecretKey = "token"
 
-// Bitwarden credentials secret (fixed name/namespace for e2e, like AWS aws-creds).
-// Document in docs/e2e/README.md. Keys: token, organization_id, project_id.
 const (
+	// BitwardenTLSSecretName is the Kubernetes secret created by e2e tests for the bitwarden-sdk-server
+	// plugin (keys: tls.crt, tls.key, ca.crt). Referenced by ExternalSecretsConfig secretRef — not bitwarden-creds.
+	BitwardenTLSSecretName = "bitwarden-tls-certs"
+	// Bitwarden credentials secret (fixed name/namespace for live Bitwarden cloud API e2e).
+	// Document in test/e2e/README.md. Keys: token, organization_id, project_id.
 	BitwardenCredSecretName      = "bitwarden-creds"
 	BitwardenCredSecretNamespace = common.ExternalSecretsOperatorCommonName
 	BitwardenCredKeyOrgID        = "organization_id"

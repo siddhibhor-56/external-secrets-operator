@@ -47,8 +47,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
-	externalsecrets "github.com/openshift/external-secrets-operator/pkg/controller/external_secrets"
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
+	externalsecrets "github.com/openshift/external-secrets-operator/pkg/controller/external_secrets"
 	"github.com/openshift/external-secrets-operator/test/utils"
 )
 
@@ -160,7 +160,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		}
 	})
 
-	Context("AWS Secret Manager", Label("Platform:AWS"), func() {
+	Context("AWS Secret Manager", Label("Platform:AWS", "Provider:AWS"), func() {
 		const (
 			clusterSecretStoreFile           = "testdata/aws_secret_store.yaml"
 			externalSecretFile               = "testdata/aws_external_secret.yaml"
@@ -171,6 +171,13 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 			awsClusterSecretStoreNamePattern = "${CLUSTERSECRETSTORE_NAME}"
 			awsSecretRegionName              = "ap-south-1"
 		)
+
+		BeforeAll(func() {
+			_, _, err := utils.FetchAWSCredsFromSecret(ctx, clientset, utils.AWSCredSecretName, utils.AWSCredNamespace)
+			Expect(err).NotTo(HaveOccurred(),
+				"AWS credentials secret %s/%s required (keys: aws_access_key_id, aws_secret_access_key). See test/e2e/README.md",
+				utils.AWSCredNamespace, utils.AWSCredSecretName)
+		})
 
 		AfterAll(func() {
 			By("Deleting the AWS secret")
@@ -258,7 +265,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Cross-platform: GCP cluster and AWS Secrets Manager", Label("CrossPlatform:GCP-AWS"), func() {
+	Context("Cross-platform: GCP cluster and AWS Secrets Manager", Label("Platform:GCP", "Provider:AWS"), func() {
 		const (
 			externalSecretFile               = "testdata/aws_external_secret.yaml"
 			pushSecretFile                   = "testdata/push_secret.yaml"
@@ -269,6 +276,13 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 			awsSecretRegionName              = "ap-south-1"
 		)
 		var crossPlatformAWSSecretName string
+
+		BeforeAll(func() {
+			_, _, err := utils.FetchAWSCredsFromSecret(ctx, clientset, utils.AWSCredSecretName, utils.AWSCredNamespace)
+			Expect(err).NotTo(HaveOccurred(),
+				"AWS credentials secret %s/%s required (keys: aws_access_key_id, aws_secret_access_key). See test/e2e/README.md",
+				utils.AWSCredNamespace, utils.AWSCredSecretName)
+		})
 
 		AfterAll(func() {
 			if crossPlatformAWSSecretName != "" {
@@ -360,7 +374,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Environment Variables", func() {
+	Context("Environment Variables", Label("Platform:Generic", "Feature:OverrideEnv"), func() {
 		// Map component names to deployment names and target container names
 		componentToDeployment := map[string]string{
 			"ExternalSecretsCoreController": externalsecrets.OperandCoreControllerDeployment,
@@ -497,7 +511,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Deployment Revision History Limit", func() {
+	Context("Deployment Revision History Limit", Label("Platform:Generic", "Feature:RevisionHistoryLimit"), func() {
 		It("should use default revisionHistoryLimit when not configured", func() {
 			esc := &operatorv1alpha1.ExternalSecretsConfig{}
 			Expect(runtimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, esc)).To(Succeed())
@@ -581,7 +595,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("UnsafeAllowGenericTargets feature", func() {
+	Context("UnsafeAllowGenericTargets feature", Label("Platform:Generic", "Feature:UnsafeAllowGenericTargets"), func() {
 		var (
 			originalFeatures []operatorv1alpha1.Feature
 			hadFeatures      bool
@@ -724,7 +738,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Annotations", func() {
+	Context("Annotations", Label("Platform:Generic", "Feature:CustomAnnotations"), func() {
 		It("should apply and remove custom annotations to created resources", func() {
 			// Define test annotations
 			testAnnotations := map[string]string{
@@ -867,7 +881,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Static Network Policy Naming", func() {
+	Context("Static Network Policy Naming", Label("Platform:Generic", "Feature:NetworkPolicy"), func() {
 		listManagedNetworkPolicies := func(ctx context.Context, namespace string) ([]networkingv1.NetworkPolicy, error) {
 			npList, err := clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{
 				LabelSelector: fmt.Sprintf("%s=%s,%s=%s", managedByLabel, managedByValue, partOfLabel, managedByValue),
@@ -925,7 +939,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		// TODO: Remove this test case after 3 releases(in v1.5.0) once the migration from
 		// unprefixed to eso-sys-/eso-user- network policy names is no longer needed.
 		It("should set the skip-np-cleanup-check annotation on ExternalSecretsConfig after migration",
-			Label("Migration", "PostUpgradeCheck"), func() {
+			Label("Feature:Upgrade"), func() {
 				By("Verifying the cleanup annotation is present on the CR")
 				Eventually(func(g Gomega) {
 					esc := &operatorv1alpha1.ExternalSecretsConfig{}
@@ -950,41 +964,14 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 			})
 	})
 
-	Context("Custom Network Policy Naming", func() {
-		It("should prepend eso-user- prefix to custom network policies from CR spec", func() {
-			By("Verifying the ExternalSecretsConfig has custom network policies configured")
-			esc := &operatorv1alpha1.ExternalSecretsConfig{}
-			Expect(runtimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, esc)).To(Succeed())
-
-			if len(esc.Spec.ControllerConfig.NetworkPolicies) == 0 {
-				Skip("No custom network policies configured in ExternalSecretsConfig")
-			}
-
-			By("Checking that custom policies exist with eso-user- prefix")
-			Eventually(func(g Gomega) {
-				nps, err := clientset.NetworkingV1().NetworkPolicies(operandNamespace).List(ctx, metav1.ListOptions{
-					LabelSelector: fmt.Sprintf("%s=%s,%s=%s", managedByLabel, managedByValue, partOfLabel, managedByValue),
-				})
-				g.Expect(err).NotTo(HaveOccurred())
-
-				npNames := make(map[string]bool)
-				for _, np := range nps.Items {
-					npNames[np.Name] = true
-				}
-
-				for _, npConfig := range esc.Spec.ControllerConfig.NetworkPolicies {
-					expectedName := userNPPrefix + npConfig.Name
-					g.Expect(npNames).To(HaveKey(expectedName),
-						"custom network policy should exist as %s (with eso-user- prefix)", expectedName)
-				}
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
-		})
-
-		It("should create a custom network policy with eso-user- prefix via CR spec update", func() {
-			testPolicyName := "e2e-test-custom-egress"
+	Context("Custom Network Policy Naming", Label("Platform:Generic", "Feature:NetworkPolicy"), func() {
+		It("should create custom network policies with eso-user- prefix from CR spec", func() {
+			const testPolicyName = "e2e-test-custom-np"
 			expectedNPName := userNPPrefix + testPolicyName
 
-			By("Adding a custom network policy to the CR")
+			// networkPolicies name/componentName are immutable (CEL); entries cannot be removed after creation.
+			// Add the test policy if missing, then verify the operator materializes it in the operand namespace.
+			By("Adding a custom network policy with a dummy egress port to ExternalSecretsConfig")
 			tcp := corev1.ProtocolTCP
 			port8443 := intstr.FromInt32(8443)
 			err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -992,13 +979,11 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 				if err := runtimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, currentCR); err != nil {
 					return err
 				}
-
 				for _, np := range currentCR.Spec.ControllerConfig.NetworkPolicies {
 					if np.Name == testPolicyName {
 						return nil
 					}
 				}
-
 				currentCR.Spec.ControllerConfig.NetworkPolicies = append(
 					currentCR.Spec.ControllerConfig.NetworkPolicies,
 					operatorv1alpha1.NetworkPolicy{
@@ -1015,21 +1000,24 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 				)
 				return runtimeClient.Update(ctx, currentCR)
 			})
-			Expect(err).NotTo(HaveOccurred(), "should add custom network policy to CR")
+			Expect(err).NotTo(HaveOccurred(), "should add custom network policy to ExternalSecretsConfig")
 
-			By("Waiting for custom network policy to be created with eso-user- prefix")
+			By("Waiting for custom network policy to be created with eso-user- prefix in operand namespace")
 			Eventually(func(g Gomega) {
 				np, err := clientset.NetworkingV1().NetworkPolicies(operandNamespace).Get(ctx, expectedNPName, metav1.GetOptions{})
-				g.Expect(err).NotTo(HaveOccurred(), "custom network policy %s should exist", expectedNPName)
+				g.Expect(err).NotTo(HaveOccurred(), "custom network policy %s should exist in %s", expectedNPName, operandNamespace)
+				g.Expect(np.Spec.PolicyTypes).To(ContainElement(networkingv1.PolicyTypeEgress))
 				g.Expect(np.Spec.Egress).To(HaveLen(1))
 				g.Expect(np.Spec.Egress[0].Ports).To(HaveLen(1))
+				g.Expect(np.Spec.Egress[0].Ports[0].Port).NotTo(BeNil())
+				g.Expect(np.Spec.Egress[0].Ports[0].Port.IntVal).To(Equal(int32(8443)))
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 	})
 
-	// Tests labeled with "Proxy:HTTP" should only be run when a cluster-wide
+	// Tests labeled with Feature:Proxy should only be run when a cluster-wide
 	// OpenShift egress proxy is already configured via proxy.config.openshift.io/cluster object
-	Context("Proxy Egress Network Policy", Label("Platform:Generic"), Label("Proxy:HTTP"), func() {
+	Context("Proxy Egress Network Policy", Label("Platform:Generic", "Feature:Proxy"), func() {
 		var clusterProxyPorts []int32
 		var originalProxy *operatorv1alpha1.ProxyConfig
 
@@ -1075,7 +1063,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 
 		// Cluster-wide proxy configuration consumed via OLM env vars.
-		It("should create proxy egress policy when configured with Managed provisioning", Label("Proxy:HTTP"), func() {
+		It("should create proxy egress policy when configured with Managed provisioning", func() {
 			By("Setting proxy configuration with Managed network policy provisioning")
 			err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 				currentCR := &operatorv1alpha1.ExternalSecretsConfig{}
@@ -1203,7 +1191,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 	// Resources intentionally excluded:
 	//   - Deployment: Kubernetes adds deployment.kubernetes.io/revision on every rollout,
 	//     so annotation events are suppressed to avoid infinite reconcile loops.
-	Context("Managed Annotation Restoration", Ordered, Label("Platform:AWS"), func() {
+	Context("Managed Annotation Restoration", Ordered, Label("Platform:Generic", "Feature:CustomAnnotations"), func() {
 		const (
 			restorationAnnotationKey   = "example.com/restoration-test"
 			restorationAnnotationValue = "managed-value"
@@ -1464,7 +1452,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 	// causes the operator to remove it from all resources. This exercises the full
 	// label lifecycle across every resource type, including the co-managed Secret whose
 	// metadata is patched via JSON Patch rather than a full update.
-	Context("Custom Labels", Label("Platform:AWS"), func() {
+	Context("Custom Labels", Label("Platform:Generic", "Feature:CustomLabels"), func() {
 		AfterEach(func() {
 			By("Verifying ExternalSecretsConfig is Ready and not Degraded after label lifecycle test")
 			Expect(utils.WaitForExternalSecretsConfigReady(ctx, dynamicClient, "cluster", 2*time.Minute)).To(Succeed(),
@@ -1575,7 +1563,7 @@ var _ = Describe("External Secrets Operator End-to-End test scenarios", Ordered,
 		})
 	})
 
-	Context("Managed Label Restoration", Label("Platform:AWS"), func() {
+	Context("Managed Label Restoration", Label("Platform:Generic", "Feature:CustomLabels"), func() {
 		const (
 			managedLabelKey   = "app"
 			managedLabelValue = "external-secrets"

@@ -42,6 +42,12 @@ func BitwardenCredMountPath() string {
 	return bitwardenCredMountPath
 }
 
+// RunBitwardenCurlJob runs a one-off curl Job in the given namespace without mounting Bitwarden credentials.
+// Used by API:Bitwarden health and auth tests that only need reachability to bitwarden-sdk-server.
+func RunBitwardenCurlJob(ctx context.Context, client kubernetes.Interface, namespace, jobName string, command []string, timeout time.Duration) (exitCode int, logs string, err error) {
+	return runBitwardenJob(ctx, client, namespace, jobName, command, timeout, false)
+}
+
 // RunBitwardenAPIJob runs a one-off Job in the given namespace with the Bitwarden cred secret mounted.
 // The job runs the given command (e.g. a shell script that curls the Bitwarden API and exits 0 on success).
 // Returns the container exit code (0 = success), pod logs, and any error (e.g. timeout, job failed).
@@ -49,7 +55,32 @@ func BitwardenCredMountPath() string {
 // Job spec is minimal (no security context); the platform (e.g. OpenShift SCC) mutates as needed.
 // Pod label app.kubernetes.io/name=external-secrets matches the network policy so the Job can reach bitwarden-sdk-server.
 func RunBitwardenAPIJob(ctx context.Context, client kubernetes.Interface, namespace, jobName string, command []string, timeout time.Duration) (exitCode int, logs string, err error) {
+	return runBitwardenJob(ctx, client, namespace, jobName, command, timeout, true)
+}
+
+func runBitwardenJob(ctx context.Context, client kubernetes.Interface, namespace, jobName string, command []string, timeout time.Duration, mountCreds bool) (exitCode int, logs string, err error) {
 	backOffLimit := int32(0)
+	container := corev1.Container{
+		Name:    "curl",
+		Image:   bitwardenAPITestRunnerImage,
+		Command: command,
+	}
+	var volumes []corev1.Volume
+	if mountCreds {
+		container.VolumeMounts = []corev1.VolumeMount{{
+			Name:      "bitwarden-cred",
+			MountPath: bitwardenCredMountPath,
+			ReadOnly:  true,
+		}}
+		volumes = []corev1.Volume{{
+			Name: "bitwarden-cred",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: BitwardenCredSecretName,
+				},
+			},
+		}}
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -63,24 +94,8 @@ func RunBitwardenAPIJob(ctx context.Context, client kubernetes.Interface, namesp
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:    "curl",
-						Image:   bitwardenAPITestRunnerImage,
-						Command: command,
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "bitwarden-cred",
-							MountPath: bitwardenCredMountPath,
-							ReadOnly:  true,
-						}},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "bitwarden-cred",
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{
-								SecretName: BitwardenCredSecretName,
-							},
-						},
-					}},
+					Containers:    []corev1.Container{container},
+					Volumes:       volumes,
 				},
 			},
 		},
