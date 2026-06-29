@@ -7,7 +7,7 @@ This operator does NOT embed or fork the upstream external-secrets project. It m
 ## CRD Hierarchy and Singleton Pattern
 
 - **ExternalSecretsConfig** (`externalsecretsconfigs.operator.openshift.io`): primary CR, singleton named `cluster`. Controls operand installation, cert-manager toggle, Bitwarden plugin, proxy, network policies, and per-component overrides.
-- **ExternalSecretsManager** (`externalsecretsmanagers.operator.openshift.io`): global config CR, also singleton named `cluster`. Provides lower-priority defaults (labels, resources, proxy, tolerations, affinity, nodeSelector, logLevel) that ExternalSecretsConfig overrides.
+- **ExternalSecretsManager** (`externalsecretsmanagers.operator.openshift.io`): global config CR, also singleton named `cluster`. Provides lower-priority defaults (labels, resources, proxy, tolerations, affinity, nodeSelector, logLevel) that ExternalSecretsConfig overrides. Also provides optional `features` (e.g., `UnsafeAllowGenericTargets`) that apply across managed deployments.
 - Precedence chain for shared fields: `ExternalSecretsConfig > ExternalSecretsManager > OLM environment variables` (proxy only).
 
 ## Static Manifest (Bindata) Pattern
@@ -30,7 +30,8 @@ Never reorder. CR annotation tracking (managed-annotations) is patched last to e
 
 Many resources are conditionally created based on CR spec. The pattern uses a slice of `{assetName, condition}` structs:
 - **cert-controller deployment/service**: created when cert-manager is NOT enabled (`!isCertManagerConfigEnabled(esc)`)
-- **bitwarden deployment/service/certificate/network-policy**: created when Bitwarden IS enabled (`isBitwardenConfigEnabled(esc)`)
+- **bitwarden deployment/service/service-account/network-policy**: created when Bitwarden IS enabled (`isBitwardenConfigEnabled(esc)`)
+- **bitwarden certificate**: created only when Bitwarden IS enabled AND no `secretRef` is provided AND cert-manager is enabled
 - **webhook TLS secret**: created only when cert-manager is NOT enabled (cert-manager manages the secret otherwise, named `external-secrets-webhook-cm` to avoid collision)
 
 ## cert-manager Integration
@@ -45,7 +46,7 @@ Many resources are conditionally created based on CR spec. The pattern uses a sl
 
 - **Trusted CA bundle**: when proxy is configured, a ConfigMap `external-secrets-trusted-ca-bundle` is created with label `config.openshift.io/inject-trusted-cabundle: "true"`. OpenShift's Cluster Network Operator (CNO) injects cluster CA certs into it. The ConfigMap data is owned by CNO; the operator only manages labels/annotations. Mounted at `/etc/pki/tls/certs` in all containers.
 - **Proxy**: both uppercase and lowercase variants (`HTTP_PROXY`/`http_proxy`, etc.) are set on all containers and init containers. Proxy is removed cleanly when config is cleared.
-- **Network policies**: default deny-all is always applied. Static allow policies for API server egress, webhook, DNS, and optionally cert-controller/bitwarden are applied from bindata. Users add custom egress-only policies via `controllerConfig.networkPolicies` with component targeting.
+- **Network policies**: default deny-all is always applied. Static allow policies (prefixed `eso-sys-`) for API server egress, webhook, DNS, and optionally cert-controller/bitwarden are applied from bindata. An automatic proxy egress NetworkPolicy (`eso-sys-allow-proxy-egress`) is created when proxy URLs are set and `networkPolicyProvisioning` is `Managed`. Users add custom egress-only policies via `controllerConfig.networkPolicies` (prefixed `eso-user-`) with component targeting.
 - **Security context**: all containers get hardened `SecurityContext` (non-root, read-only root FS, drop ALL capabilities, seccomp RuntimeDefault).
 - **Console capability annotation**: ConsoleYAMLSample resources require `capability.openshift.io/name: Console` annotation.
 
@@ -66,7 +67,7 @@ Container images in static YAML manifests (`bindata/`) have placeholder values t
 - `BITWARDEN_SDK_SERVER_IMAGE_VERSION`: version label for bitwarden resources
 - `OPERATOR_IMAGE_VERSION`: operator version
 
-The reconciler returns an irrecoverable error if image env vars are empty.
+The reconciler returns an irrecoverable error if `RELATED_IMAGE_EXTERNAL_SECRETS` or `RELATED_IMAGE_BITWARDEN_SDK_SERVER` is empty. The version env vars (`OPERAND_EXTERNAL_SECRETS_IMAGE_VERSION`, `BITWARDEN_SDK_SERVER_IMAGE_VERSION`, `OPERATOR_IMAGE_VERSION`) may be empty without causing errors -- version labels will simply be blank.
 
 ## Client Architecture
 

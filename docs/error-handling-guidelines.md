@@ -4,37 +4,44 @@
 
 Resource reconciliation errors flow through the `ReconcileError` type defined in `pkg/controller/common/errors.go`. It carries a `Reason` (`ErrorReason` string) that determines requeue behavior, a human-readable `Message`, and the underlying `Err`. Setup errors (finalizers, client construction, CR fetching) use plain `fmt.Errorf` wrapping as described below.
 
-### Two Error Reasons
+### Three Error Reasons
 
 | Reason | Constant | Requeue? | When to use |
 |---|---|---|---|
 | `IrrecoverableError` | `common.IrrecoverableError` | No | Invalid config, missing env vars, permission errors, bad requests |
 | `RetryRequiredError` | `common.RetryRequiredError` | Yes (30s) | Transient network issues, resource conflicts, timeouts, not-found |
+| `UserConfigurationError` | `common.UserConfigurationError` | No (unless NotFound) | Invalid or incomplete user-provided configuration (e.g., missing referenced Secret or Issuer). Sets Degraded. Recovery is driven by watches on the affected resource; NotFound errors still use periodic requeue (30s) until the referenced object exists. |
 
 ### Constructor Functions
 
 - `common.NewIrrecoverableError(err, messageFmt, args...)` -- for errors that cannot be fixed by retrying.
 - `common.NewRetryRequiredError(err, messageFmt, args...)` -- for transient errors worth retrying.
+- `common.NewUserConfigurationError(err, messageFmt, args...)` -- for errors caused by invalid or incomplete user configuration. The operator sets Degraded but generally does not requeue (relying on watches instead), except when the underlying error is NotFound.
 - `common.FromClientError(err, messageFmt, args...)` -- auto-classifies Kubernetes API errors: `Unauthorized`, `Forbidden`, `Invalid`, and `BadRequest` become irrecoverable; everything else becomes retry-required.
-- All three return `nil` when the input `err` is `nil`. Always check this at call sites when the constructor is the last expression before return.
+- All four return `nil` when the input `err` is `nil`. Always check this at call sites when the constructor is the last expression before return.
 
 ### Checking Error Type
 
-Use `common.IsIrrecoverableError(err)` to check whether an error is irrecoverable. It uses `errors.As` to traverse wrapped error chains. There is no corresponding `IsRetryRequiredError` -- the convention is: if it is not irrecoverable and is a `ReconcileError`, it is retryable.
+- `common.IsIrrecoverableError(err)` -- checks whether an error is irrecoverable. Uses `errors.As` to traverse wrapped error chains.
+- `common.IsRetryRequiredError(err)` -- checks whether an error is retry-required.
+- `common.IsUserConfigurationError(err)` -- checks whether an error is a user configuration error.
+- `common.IsUserConfigurationNotFound(err)` -- checks whether a user configuration error is caused by a missing object (NotFound). Used to decide whether to requeue.
 
 ## Error-to-Reconcile-Result Mapping
 
 The main reconcile dispatcher in `processReconcileRequest` (in `pkg/controller/external_secrets/controller.go`) maps errors to `ctrl.Result` as follows:
 
 ```
-err == nil              -> Result{}, nil                          (success, no requeue)
-IsIrrecoverableError    -> Result{}, errUpdate                    (no requeue; only status update error propagates)
-retryable error         -> Result{RequeueAfter: 30s}, nil         (manual requeue, no error to controller-runtime)
-status update failure   -> Result{}, errUpdate                    (let controller-runtime handle backoff)
-NotFound on primary CR  -> Result{}, nil                          (skip reconciliation silently)
+err == nil                    -> Result{}, nil                          (success, no requeue)
+IsIrrecoverableError          -> Result{}, errUpdate                    (no requeue; only status update error propagates)
+IsUserConfigurationError      -> Result{}, errUpdate                    (no requeue; Degraded=True; watches drive recovery)
+  IsUserConfigurationNotFound -> Result{RequeueAfter: 30s}, nil         (requeue because watches won't fire for unmanaged objects)
+RetryRequiredError            -> Result{RequeueAfter: 30s}, nil         (manual requeue, no error to controller-runtime)
+status update failure         -> Result{}, errUpdate                    (let controller-runtime handle backoff)
+NotFound on primary CR        -> Result{}, nil                          (skip reconciliation silently)
 ```
 
-Key rule: never return both `RequeueAfter` and a non-nil error. For recoverable errors, return `RequeueAfter` with `nil` error. For irrecoverable errors, return empty `Result` so no requeue happens.
+Key rule: never return both `RequeueAfter` and a non-nil error. For recoverable errors, return `RequeueAfter` with `nil` error. For irrecoverable and user-configuration errors, return empty `Result` so no requeue happens (except user-configuration NotFound, which requeues).
 
 The default requeue interval is `common.DefaultRequeueTime` (30 seconds), defined in `pkg/controller/common/constants.go`.
 
@@ -97,12 +104,13 @@ The ESM default resource creation (`pkg/controller/external_secrets_manager/exte
 
 ### Condition Update Rules
 
-1. On irrecoverable error: set `Degraded=True/Failed` and `Ready=False/Ready`.
-2. On retryable error: set `Degraded=False/Ready` and `Ready=False/Progressing` with the error message.
-3. On success: set `Degraded=False/Ready` and `Ready=True/Ready`.
-4. Set both conditions atomically via `apimeta.SetStatusCondition` before calling `updateStatus`.
-5. Only call `updateStatus` when `SetStatusCondition` returns `true` (condition actually changed).
-6. Always include `ObservedGeneration` from the CR's current `.metadata.generation`.
+1. On irrecoverable error: set `Degraded=True/Failed` and `Ready=False/Failed`.
+2. On user configuration error: set `Degraded=True/Failed` and `Ready=False/Failed` with message `"user configuration is invalid: ..."`.
+3. On retryable error: set `Degraded=False/Ready` and `Ready=False/Progressing` with the error message.
+4. On success: set `Degraded=False/Ready` and `Ready=True/Ready`.
+5. Set both conditions atomically via `apimeta.SetStatusCondition` before calling `updateStatus`.
+6. Only call `updateStatus` when `SetStatusCondition` returns `true` (condition actually changed).
+7. Always include `ObservedGeneration` from the CR's current `.metadata.generation`.
 
 ### Error Aggregation on Status Update Failure
 

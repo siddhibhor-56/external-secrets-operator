@@ -82,7 +82,7 @@ The repo uses `//nolint:kubeapilinter` comments for intentional deviations. Docu
 ### ExternalSecretsConfig Status
 - Embeds `ConditionalStatus` (from `meta.go`) which holds `[]metav1.Condition` with standard merge markers (`+listType=map`, `+listMapKey=type`, `+patchMergeKey=type`, `+patchStrategy=merge`).
 - Uses standard `metav1.Condition` with `ObservedGeneration` set to `esc.GetGeneration()`.
-- Condition types: `Ready` and `Degraded` (defined as constants in `conditions.go`).
+- Condition types: `Ready`, `Degraded`, and `UpdateAnnotation` (all defined as constants in `conditions.go`). The `UpdateAnnotation` condition is set by the `crd-annotator` controller on the `ExternalSecretsConfig` status.
 - Reasons: `Failed`, `Ready`, `Progressing`, `Completed` (also constants, with `Progressing` defined as constant `ReasonInProgress`).
 - Both conditions are set atomically before a single status update call.
 - Additional status fields: `externalSecretsImage`, `bitwardenSDKServerImage`.
@@ -116,7 +116,7 @@ Use `+kubebuilder:default` for server-side defaulting:
 
 - `CommonConfigs` (in `meta.go`) is embedded via `json:",inline"` in both `ApplicationConfig` and `GlobalConfig`. It provides `logLevel`, `resources`, `affinity`, `tolerations`, `nodeSelector`, `proxy`.
 - `ObjectReference`, `SecretReference`, `ConfigMapKeyReference`, `ConditionalStatus` are reusable building blocks in `meta.go`.
-- Named types (`Mode`, `ManagementState`, `ComponentName`) with constants must be used instead of raw strings for enum fields.
+- Named types (`Mode`, `ManagementState`, `ComponentName`, `FeatureName`) with constants must be used instead of raw strings for enum fields.
 
 ## Code Generation Pipeline
 
@@ -131,7 +131,7 @@ Never edit `zz_generated.deepcopy.go` or CRD YAML files by hand.
 
 ## API Integration Tests
 
-API validation is tested via declarative YAML test suites in `api/v1alpha1/tests/<crdname>/`. Each `.testsuite.yaml` file defines `onCreate` and `onUpdate` test cases specifying `initial`, `expected`, and `expectedError` YAML. The test framework (in `test/apis/`) installs CRDs into a real envtest API server (requires Kube >= 1.25 for CEL).
+API validation is tested via declarative YAML test suites in `api/v1alpha1/tests/<crd-api-group-domain>/` (e.g., `externalsecretsconfig.operator.openshift.io/`, `externalsecretsmanager.operator.openshift.io/`). Each `.testsuite.yaml` file defines `onCreate` and `onUpdate` test cases specifying `initial`, `expected`, and `expectedError` YAML. The test framework (in `test/apis/`) installs CRDs into a real envtest API server (requires Kube >= 1.25 for CEL).
 
 When adding a new CEL validation rule or field constraint, add corresponding test cases to the relevant `.testsuite.yaml` covering:
 - Valid creation (initial + expected)

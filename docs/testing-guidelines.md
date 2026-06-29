@@ -2,7 +2,7 @@
 
 ## Test Architecture
 
-This repo has three test tiers, each in a separate Go module boundary (the repo uses `go.work` with modules at `.`, `./test`, `./cmd/external-secrets-operator`, `./tools`):
+This repo has three test tiers. The repo uses `go.work` with modules at `.`, `./test`, `./cmd/external-secrets-operator`, `./tools`. Unit tests live in the root `.` module; API and E2E tests share the `./test` module:
 
 | Tier | Location | Make Target | Framework | Cluster Required |
 |------|----------|-------------|-----------|-----------------|
@@ -10,7 +10,7 @@ This repo has three test tiers, each in a separate Go module boundary (the repo 
 | API Integration | `test/apis/` | `make test-apis` | Ginkgo/Gomega + envtest | No (envtest) |
 | E2E | `test/e2e/` | `make test-e2e` | Ginkgo/Gomega + live cluster | Yes |
 
-`make test` runs both `test-apis` and `test-unit` (no cluster needed).
+`make test` runs `manifests`, `generate`, `fmt`, `vet`, then both `test-apis` and `test-unit` (no cluster needed). It also builds envtest binaries as a prerequisite.
 
 ## Unit Tests (`pkg/`)
 
@@ -73,19 +73,26 @@ Tests are filtered by Ginkgo labels. The default filter is `"Platform: isSubsetO
 | Label | Scope | Required Secrets |
 |-------|-------|-----------------|
 | `Platform:AWS` | AWS SecretStore + ExternalSecret + PushSecret | `aws-creds` in `kube-system` |
+| `Platform:Generic` | Platform-independent operand tests | None |
 | `CrossPlatform:GCP-AWS` | GCP cluster using AWS Secrets Manager | `aws-creds` in `kube-system` |
 | `Provider:Bitwarden` | Bitwarden ESO provider via ClusterSecretStore | `bitwarden-creds` in `external-secrets-operator` |
 | `API:Bitwarden` | Direct HTTP tests to bitwarden-sdk-server | `bitwarden-creds` in `external-secrets-operator` |
+| `Suite:Bitwarden` | Full Bitwarden suite | `bitwarden-creds` in `external-secrets-operator` |
+| `Proxy:HTTP` | Proxy-related tests | Proxy configuration |
+| `Migration` | Migration/upgrade tests | None |
+| `PostUpgradeCheck` | Post-upgrade verification | None |
+
+Note: some E2E test contexts (e.g., Environment Variables, Deployment Revision History, Annotations, Network Policies, Trusted CA Bundle) have **no platform label** and only run when the label filter is empty (`E2E_GINKGO_LABEL_FILTER=""`).
 
 Run a specific suite: `make test-e2e E2E_GINKGO_LABEL_FILTER="Provider:Bitwarden"`.
 Run all: `make test-e2e E2E_GINKGO_LABEL_FILTER=""`.
 
 ### E2E Structure
-- Suite setup (`e2e_suite_test.go`): initializes K8s clients (`kubernetes.Clientset`, `dynamic.DynamicClient`, `controller-runtime client.Client`), sets timeout with 5-minute cleanup buffer, configures JSON/JUnit reports.
-- `BeforeAll`: creates test namespace (prefix `external-secrets-e2e-test-`), creates/verifies `ExternalSecretsConfig` CR, waits for operator/operand pods.
+- Suite setup (`e2e_suite_test.go`): `BeforeSuite` initializes K8s clients (`kubernetes.Clientset`, `dynamic.DynamicClient`, `controller-runtime client.Client`), sets timeout with 5-minute cleanup buffer, configures JSON/JUnit reports. `AfterSuite` runs global `CleanupESOOperandAndRelated`.
+- `BeforeAll` (in `e2e_test.go`): creates test namespace (prefix `external-secrets-e2e-test-`), creates/verifies `ExternalSecretsConfig` CR, waits for operator/operand pods.
 - `BeforeEach`: verifies operand pods are ready.
 - `AfterEach`: on failure, dumps artifacts via `utils.DumpE2EArtifacts()` to `ARTIFACT_DIR` or `_output/`.
-- `AfterAll`: deletes test namespace and cluster CR.
+- `AfterAll` (in `e2e_test.go`): deletes test namespace and cluster CR.
 
 ### Test Data
 - YAML fixtures embedded via `//go:embed testdata/*` in `e2e_test.go`.

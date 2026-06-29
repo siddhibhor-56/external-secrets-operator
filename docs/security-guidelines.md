@@ -31,7 +31,7 @@ The metrics server uses `filters.WithAuthenticationAndAuthorization` as `FilterP
 
 The repo manages RBAC at three distinct levels. Changing one level does not affect the others.
 
-**1. Operator's own ClusterRole** (`config/rbac/role.yaml`): Grants permissions the operator process needs. Generated from `+kubebuilder:rbac` markers in `pkg/controller/external_secrets/controller.go`. When adding new API interactions, add markers there and run `make manifests`.
+**1. Operator's own ClusterRole** (`config/rbac/role.yaml`): Grants permissions the operator process needs. Generated from `+kubebuilder:rbac` markers in `pkg/controller/external_secrets/controller.go` and `pkg/controller/external_secrets_manager/controller.go`. When adding new API interactions, add markers to the appropriate controller file and run `make manifests`.
 
 **2. Operand ClusterRoles** (static YAML in `bindata/external-secrets/resources/`):
 - `clusterrole_external-secrets-controller.yml` -- main controller (secrets CRUD, ESO CRDs)
@@ -68,9 +68,9 @@ Two certificate provisioning paths exist, controlled by `spec.controllerConfig.c
 
 **Built-in cert-controller** (default): A separate deployment (`external-secrets-cert-controller`) manages TLS certificates for the webhook. The cert-controller has its own RBAC and creates/updates the `external-secrets-webhook` Secret. The webhook reads certs from `/tmp/certs` volume mount.
 
-**cert-manager integration**: When enabled, `Certificate` resources are created from templates in `bindata/`. The `issuerRef` is validated to exist before creating the Certificate (via `assertIssuerRefExists`). The webhook secret name changes to `external-secrets-webhook-cm` to avoid clashing with the cert-controller secret. The `cert-manager.io/inject-ca-from` annotation is conditionally added to webhook configurations.
+**cert-manager integration**: When enabled, `Certificate` resources are created from templates in `bindata/`. The `issuerRef` is validated to exist before creating the Certificate (via `assertIssuerRefExists`). The webhook secret name changes to `external-secrets-webhook-cm` to avoid clashing with the cert-controller secret. The `cert-manager.io/inject-ca-from` annotation is conditionally added to webhook configurations and ESO CRDs (via the `crd-annotator` controller) only when `injectAnnotations` is set to `"true"` (not merely when cert-manager mode is Enabled).
 
-Key constraint: `certManager.mode` and `issuerRef` are immutable once set (enforced via `XValidation:rule="self == oldSelf"`).
+Key constraint: `certManager.mode`, `issuerRef`, and `injectAnnotations` are immutable once set (enforced via `XValidation:rule="self == oldSelf"`).
 
 ## Bitwarden TLS Requirements
 
@@ -102,7 +102,7 @@ Validating webhooks use:
 - `timeoutSeconds: 5`
 - Webhook listens on port `10250` (not the default 443)
 
-The SecretStore webhook does not explicitly set `failurePolicy`, which defaults to `Fail` in Kubernetes. Maintain `Fail` for security-critical validations.
+The SecretStore webhook also explicitly sets `failurePolicy: Fail` on both SecretStore and ClusterSecretStore webhooks. Maintain `Fail` for security-critical validations.
 
 ## Singleton Pattern (Cluster-Scoped CRs)
 
@@ -118,7 +118,9 @@ E2E tests reference AWS credentials via a well-known Secret (`aws-creds` in `kub
 
 ## Reconciler Drift Detection
 
-The operator reconciles all managed resources back to desired state. RBAC rules, deployments, webhook configurations, and network policies are compared field-by-field (via `HasObjectChanged` in `pkg/controller/common/utils.go`). If any resource is externally modified (e.g., someone manually adds permissions to a ClusterRole), the operator detects the drift and reverts it. This is a critical security property -- do not disable drift detection for security-sensitive resources.
+The operator reconciles all managed resources back to desired state. RBAC rules, deployments (including container security context), webhook configurations, network policies, and certificates are compared field-by-field (via `HasObjectChanged` in `pkg/controller/common/utils.go`). If any resource is externally modified (e.g., someone manually adds permissions to a ClusterRole), the operator detects the drift and reverts it. This is a critical security property -- do not disable drift detection for security-sensitive resources.
+
+Note: drift detection does not currently cover pod-level `SecurityContext`, `hostNetwork`, or webhook `failurePolicy`. Manual changes to those fields will not be automatically reverted.
 
 ## Error Classification for Security
 

@@ -19,9 +19,9 @@ Three controllers run in a single binary:
 
 | Controller | Package | Watches | Purpose |
 |---|---|---|---|
-| `external-secrets-controller` | `pkg/controller/external_secrets/` | `ExternalSecretsConfig` CR + all managed resources | Installs/reconciles operand deployments, RBAC, services, webhooks, network policies |
+| `external-secrets-controller` | `pkg/controller/external_secrets/` | `ExternalSecretsConfig` CR + `ExternalSecretsManager` (spec) + managed resources (Deployments, RBAC, Services, Secrets metadata, ConfigMaps, NetworkPolicies, Webhooks) + conditionally `cert-manager.io/Certificate` | Installs/reconciles operand deployments, RBAC, services, webhooks, network policies |
 | `external-secrets-manager` | `pkg/controller/external_secrets_manager/` | `ExternalSecretsManager` CR + `ExternalSecretsConfig` status | Aggregates controller statuses into a global status CR |
-| `crd-annotator` | `pkg/controller/crd_annotator/` | ESO CRDs + `ExternalSecretsConfig` | Adds cert-manager CA injection annotations to operand CRDs (conditional) |
+| `crd-annotator` | `pkg/controller/crd_annotator/` | ESO CRDs (metadata, label-filtered) + `ExternalSecretsConfig` | Adds cert-manager CA injection annotations to operand CRDs (conditional; only registered when cert-manager is installed) |
 
 ## Project Structure
 
@@ -29,7 +29,9 @@ Three controllers run in a single binary:
 api/v1alpha1/           CRD type definitions, conditions, shared types, deepcopy
 api/v1alpha1/tests/     Declarative YAML test suites for CRD validation
 bindata/                Static operand YAML manifests (compiled into Go via go-bindata)
-cmd/                    Operator entrypoint (main.go)
+bundle/                 OLM bundle manifests
+cmd/external-secrets-operator/  Operator entrypoint (main.go, separate Go module)
+docs/                   Guideline docs (security, performance, error handling, etc.)
 config/                 Kustomize manifests (CRDs, RBAC, manager, samples, bundle)
 hack/                   Shell scripts (codegen, verification, CI helpers)
 images/ci/              CI Dockerfiles (coverage-instrumented builds)
@@ -41,11 +43,13 @@ pkg/controller/         Controller implementations
   external_secrets/     Main operand reconciliation controller
   external_secrets_manager/  Status aggregation controller
 pkg/operator/           Manager setup, controller registration
+  assets/               Generated bindata (bindata.go)
 pkg/version/            Build-time version info (ldflags)
 test/apis/              API integration tests (Ginkgo + envtest)
 test/e2e/               End-to-end tests (Ginkgo + live cluster)
 test/utils/             E2E test helpers
 tools/                  Go module for build-time tool dependencies
+vendor/                 Workspace-level vendoring (go work vendor)
 ```
 
 ## Go Workspace and Module Layout
@@ -70,13 +74,13 @@ The repo uses `go.work` with four modules: `.`, `./cmd/external-secrets-operator
 | `make lint` | Run golangci-lint with all configured linters |
 | `make lint-fix` | Run golangci-lint with auto-fix |
 | `make update` | Full regeneration: codegen + manifests + operand manifests + bindata + bundle + docs |
-| `make verify` | Run vet + fmt + verify-deps + verify-bindata + verify-generated + govulncheck + check-git-diff |
+| `make verify` | Run vet + fmt + verify-deps + verify-bindata + verify-bindata-assets + verify-generated + govulncheck + check-git-diff |
 | `make update-vendor` | Update vendor directory across all workspace modules |
 | `make update-dep PKG=x@v` | Update a single dependency across all modules |
 | `make manifests` | Regenerate CRD YAML, RBAC, webhook configs from kubebuilder markers |
 | `make generate` | Regenerate DeepCopy methods |
 | `make docs` | Regenerate API reference docs |
-| `make clean` | Remove bin/, _output/, cover.out |
+| `make clean` | Remove bin/, _output/, cover.out, dist/ |
 
 After any code change, run `make update && make verify` to ensure all generated files are consistent. CI runs `check-git-diff` which fails if generated files are stale.
 
@@ -182,9 +186,9 @@ Resources that depend on CR configuration use a slice of `{assetName string, con
 - Run `make lint` and `make test` locally before submitting.
 - Run `make verify` to ensure generated files are in sync.
 - Add unit tests for new reconciliation logic using table-driven tests and `FakeCtrlClient`.
-- Add API test cases in `api/v1alpha1/tests/<crd>/` for any new CRD field or validation rule.
+- Add API test cases in `api/v1alpha1/tests/<crd-api-group-domain>/` (e.g., `externalsecretsconfig.operator.openshift.io/`) for any new CRD field or validation rule.
 - Add E2E test cases with appropriate Ginkgo labels for platform-specific tests.
-- Follow existing error wrapping patterns: `common.FromClientError` for API calls, `common.NewIrrecoverableError` for config validation failures.
+- Follow existing error wrapping patterns: `common.FromClientError` for API calls, `common.NewIrrecoverableError` for config validation failures, `common.NewUserConfigurationError` for invalid user-provided configuration.
 - Commit messages should reference the relevant Jira ticket (e.g., `OCPBUGS-12345: description`).
 - PR reviewers/approvers are listed in `OWNERS`.
 
