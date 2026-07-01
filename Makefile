@@ -213,8 +213,8 @@ test-unit: vet ## Run unit tests.
 # E2E_TIMEOUT is the timeout for e2e tests.
 E2E_TIMEOUT ?= 1h
 # E2E_GINKGO_LABEL_FILTER is ginkgo label query for selecting tests. See
-# https://onsi.github.io/ginkgo/#spec-labels. The default is to run tests on the AWS platform.
-E2E_GINKGO_LABEL_FILTER ?= "Platform: isSubsetOf {AWS}"
+# https://onsi.github.io/ginkgo/#spec-labels. Default runs Platform:AWS and Platform:Generic tests; excludes Feature:Proxy, Feature:Upgrade, and Provider:Bitwarden.
+E2E_GINKGO_LABEL_FILTER ?= Platform: isSubsetOf {AWS,Generic} && !(Feature: containsAny {Proxy, Upgrade}) && !(Provider: containsAny Bitwarden)
 .PHONY: test-e2e
 test-e2e: ## Run e2e tests against a cluster.
 	@echo "Running go e2e tests..."
@@ -225,7 +225,7 @@ test-e2e: ## Run e2e tests against a cluster.
 		-ginkgo.v \
 		-ginkgo.trace \
 		-ginkgo.show-node-events \
-		-ginkgo.label-filter=$(E2E_GINKGO_LABEL_FILTER)
+		-ginkgo.label-filter='$(E2E_GINKGO_LABEL_FILTER)'
 
 .PHONY: test-apis
 test-apis: $(ENVTEST) $(GINKGO) ## Run API integration tests.

@@ -41,7 +41,7 @@ const (
 // inClusterBaseURL is the Bitwarden SDK server URL as seen from inside the cluster (same as external-secrets controller). Respects BITWARDEN_SDK_SERVER_URL.
 var inClusterBaseURL = utils.GetBitwardenSDKServerURL()
 
-var _ = Describe("Bitwarden SDK Server API", Ordered, Label("API:Bitwarden", "Suite:Bitwarden"), func() {
+var _ = Describe("Bitwarden SDK Server API", Ordered, Label("Platform:Generic", "API:Bitwarden"), func() {
 	var (
 		ctx       context.Context
 		clientset *kubernetes.Clientset
@@ -50,28 +50,17 @@ var _ = Describe("Bitwarden SDK Server API", Ordered, Label("API:Bitwarden", "Su
 
 	BeforeAll(func() {
 		ctx = context.Background()
-		var err error
 		clientset = suiteClientset
 		Expect(clientset).NotTo(BeNil(), "suite clientset not initialized")
 
-		By("Ensuring Bitwarden operand is ready (enable plugin, wait for server)")
-		Expect(ensureBitwardenOperandReady(ctx)).To(Succeed())
+		By("Provisioning bitwarden-tls-certs, enabling the plugin secretRef, and waiting for bitwarden-sdk-server")
+		Expect(ensureBitwardenOperandReady(ctx, nil)).To(Succeed())
 
-		credNamespace := utils.BitwardenCredSecretNamespace
-		_, err = clientset.CoreV1().Secrets(credNamespace).Get(ctx, utils.BitwardenCredSecretName, metav1.GetOptions{})
-		if err != nil {
-			Skip(fmt.Sprintf("Bitwarden credentials secret %s/%s required for API tests. See docs/e2e/README.md. Error: %v", credNamespace, utils.BitwardenCredSecretName, err))
-		}
-
-		// Run API test Jobs in the operand namespace (external-secrets) so they can reach bitwarden-sdk-server
-		// (same network as the controller). Copy the cred secret there so the Job can mount it.
 		namespace = utils.BitwardenOperandNamespace
-		By("Copying Bitwarden cred secret to " + namespace + " for API test Jobs")
-		Expect(utils.CopySecretToNamespace(ctx, clientset, utils.BitwardenCredSecretName, credNamespace, utils.BitwardenCredSecretName, namespace)).To(Succeed())
 	})
 
-	runAPIJob := func(jobName, script string) (int, string) {
-		code, logs, err := utils.RunBitwardenAPIJob(ctx, clientset, namespace, jobName, []string{"sh", "-c", script}, apiJobTimeout)
+	runCurlJob := func(jobName, script string) (int, string) {
+		code, logs, err := utils.RunBitwardenCurlJob(ctx, clientset, namespace, jobName, []string{"sh", "-c", script}, apiJobTimeout)
 		Expect(err).NotTo(HaveOccurred(), "job %s: %s", jobName, logs)
 		return code, logs
 	}
@@ -79,13 +68,13 @@ var _ = Describe("Bitwarden SDK Server API", Ordered, Label("API:Bitwarden", "Su
 	Context("Health", func() {
 		It("GET /ready should return 200 with body ready", func() {
 			script := fmt.Sprintf("code=$(curl -k -s -o /tmp/out -w '%%{http_code}' %s/ready) && body=$(cat /tmp/out) && [ \"$code\" = \"200\" ] && [ \"$body\" = \"ready\" ] || (echo \"code=$code body=$body\"; exit 1)", inClusterBaseURL)
-			code, logs := runAPIJob("api-ready-"+utils.GetRandomString(5), script)
+			code, logs := runCurlJob("api-ready-"+utils.GetRandomString(5), script)
 			Expect(code).To(Equal(0), "expected exit 0: %s", logs)
 		})
 
 		It("GET /live should return 200 with body live", func() {
 			script := fmt.Sprintf("code=$(curl -k -s -o /tmp/out -w '%%{http_code}' %s/live) && body=$(cat /tmp/out) && [ \"$code\" = \"200\" ] && [ \"$body\" = \"live\" ] || (echo \"code=$code body=$body\"; exit 1)", inClusterBaseURL)
-			code, logs := runAPIJob("api-live-"+utils.GetRandomString(5), script)
+			code, logs := runCurlJob("api-live-"+utils.GetRandomString(5), script)
 			Expect(code).To(Equal(0), "expected exit 0: %s", logs)
 		})
 	})
@@ -93,18 +82,35 @@ var _ = Describe("Bitwarden SDK Server API", Ordered, Label("API:Bitwarden", "Su
 	Context("Auth", func() {
 		It("request without Warden-Access-Token should return 401", func() {
 			script := fmt.Sprintf("code=$(curl -k -s -o /dev/null -w '%%{http_code}' -X GET -H 'Content-Type: application/json' -d '{\"organizationId\":\"00000000-0000-0000-0000-000000000000\"}' %s%s/secrets) && [ \"$code\" = \"401\" ] || (echo \"code=$code\"; exit 1)", inClusterBaseURL, apiPath)
-			code, logs := runAPIJob("api-auth-no-token-"+utils.GetRandomString(5), script)
+			code, logs := runCurlJob("api-auth-no-token-"+utils.GetRandomString(5), script)
 			Expect(code).To(Equal(0), "expected exit 0: %s", logs)
 		})
 
 		It("request with invalid token should return 400", func() {
 			script := fmt.Sprintf("code=$(curl -k -s -o /dev/null -w '%%{http_code}' -X GET -H 'Content-Type: application/json' -H 'Warden-Access-Token: invalid-token' -d '{\"organizationId\":\"00000000-0000-0000-0000-000000000000\"}' %s%s/secrets) && [ \"$code\" = \"400\" ] || (echo \"code=$code\"; exit 1)", inClusterBaseURL, apiPath)
-			code, logs := runAPIJob("api-auth-invalid-token-"+utils.GetRandomString(5), script)
+			code, logs := runCurlJob("api-auth-invalid-token-"+utils.GetRandomString(5), script)
 			Expect(code).To(Equal(0), "expected exit 0: %s", logs)
 		})
 	})
 
-	Context("Secrets API", func() {
+	Context("Secrets API", Label("Provider:Bitwarden"), func() {
+		BeforeAll(func() {
+			credNamespace := utils.BitwardenCredSecretNamespace
+			_, err := clientset.CoreV1().Secrets(credNamespace).Get(ctx, utils.BitwardenCredSecretName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(),
+				"Bitwarden credentials secret %s/%s required for Secrets API tests (keys: token, organization_id, project_id). See test/e2e/README.md",
+				credNamespace, utils.BitwardenCredSecretName)
+
+			By("Copying Bitwarden cred secret to " + namespace + " for API test Jobs")
+			Expect(utils.CopySecretToNamespace(ctx, clientset, utils.BitwardenCredSecretName, credNamespace, utils.BitwardenCredSecretName, namespace)).To(Succeed())
+		})
+
+		runAPIJob := func(jobName, script string) (int, string) {
+			code, logs, err := utils.RunBitwardenAPIJob(ctx, clientset, namespace, jobName, []string{"sh", "-c", script}, apiJobTimeout)
+			Expect(err).NotTo(HaveOccurred(), "job %s: %s", jobName, logs)
+			return code, logs
+		}
+
 		It("GET /rest/api/1/secrets (ListSecrets) should return 200 with data array", func() {
 			credPath := utils.BitwardenCredMountPath()
 			script := fmt.Sprintf("TOKEN=$(cat %s/token) && ORG=$(cat %s/organization_id) && code=$(curl -k -s -o /tmp/out -w '%%{http_code}' -X GET -H 'Content-Type: application/json' -H \"Warden-Access-Token: $TOKEN\" -d \"{\\\"organizationId\\\":\\\"$ORG\\\"}\" %s%s/secrets) && [ \"$code\" = \"200\" ] && grep -q '\"data\"' /tmp/out || (echo \"code=$code\"; cat /tmp/out; exit 1)", credPath, credPath, inClusterBaseURL, apiPath)
@@ -114,8 +120,6 @@ var _ = Describe("Bitwarden SDK Server API", Ordered, Label("API:Bitwarden", "Su
 
 		It("POST /rest/api/1/secret (CreateSecret) then GET and DELETE", func() {
 			credPath := utils.BitwardenCredMountPath()
-			// Create, extract id, Get, Update, Delete; each step must succeed (exit 0).
-			// Bitwarden Secrets Manager requires projectIds when creating a secret.
 			script := fmt.Sprintf(`
 TOKEN=$(cat %s/token) && ORG=$(cat %s/organization_id) && PROJECT=$(cat %s/project_id) && BASE=%s
 BODY="{\"key\":\"e2e-api-crud\",\"value\":\"v1\",\"note\":\"e2e\",\"organizationId\":\"$ORG\",\"projectIds\":[\"$PROJECT\"]}"

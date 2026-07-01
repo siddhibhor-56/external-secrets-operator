@@ -37,6 +37,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -94,7 +95,7 @@ func testLeafCertPEM() string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
-var _ = Describe("Trusted CA Bundle", Ordered, func() {
+var _ = Describe("Trusted CA Bundle", Ordered, Label("Platform:Generic", "Feature:TrustedCABundle"), func() {
 	var (
 		ctx context.Context
 		esc *operatorv1alpha1.ExternalSecretsConfig
@@ -332,26 +333,42 @@ var _ = Describe("Trusted CA Bundle", Ordered, func() {
 		}, time.Minute, 5*time.Second).Should(Succeed(), "core controller should have user CA bundle after recovery")
 	})
 
-	It("should mount user-ca-bundle when ConfigMap has the CNO inject label but no proxy is configured", func() {
+	It("should handle trustedCABundle ConfigMap with CNO inject label based on cluster proxy", func() {
+		clusterProxyConfigured := isOpenShiftClusterProxyConfigured(ctx)
+
 		By("Creating a ConfigMap with the CNO inject label")
 		createTestCAConfigMap(ctx, trustedCABundleTestCMName, externalsecrets.UserCABundleKeyPath, testCACertPEM(), map[string]string{
 			externalsecrets.TrustedCABundleInjectLabel: "true",
 		})
 
-		By("Setting trustedCABundle on ExternalSecretsConfig")
+		By("Setting trustedCABundle on ExternalSecretsConfig (no proxy in ESC spec)")
 		setTrustedCABundle(ctx, trustedCABundleTestCMName, externalsecrets.UserCABundleKeyPath)
 
-		By("Waiting for ExternalSecretsConfig to be Ready — skip requires CNO label and proxy")
+		By("Waiting for ExternalSecretsConfig to be Ready")
 		Expect(utils.WaitForExternalSecretsConfigReady(ctx, suiteDynamicClient, common.ExternalSecretsConfigObjectName, 2*time.Minute)).To(Succeed())
 
-		By("Verifying the core controller deployment has the user-ca-bundle volume")
+		if clusterProxyConfigured {
+			By("Verifying user CA mount is skipped and operator-managed trusted-ca-bundle is used when cluster proxy is configured")
+			Eventually(func(g Gomega) {
+				deployment, err := suiteClientset.AppsV1().Deployments(operandNamespace).Get(ctx, externalsecrets.OperandCoreControllerDeployment, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				assertDoesNotHaveUserCABundleVolume(g, deployment.Spec.Template.Spec.Volumes)
+				assertDoesNotHaveUserCABundleMount(g, deployment.Spec.Template.Spec.Containers)
+				assertDoesNotHaveSSLCertDir(g, deployment.Spec.Template.Spec.Containers)
+				assertHasProxyTrustedCABundleVolume(g, deployment.Spec.Template.Spec.Volumes)
+			}, time.Minute, 5*time.Second).Should(Succeed(),
+				"CNO-managed ConfigMap with cluster proxy should use operator trusted-ca-bundle, not user-ca-bundle")
+			return
+		}
+
+		By("Verifying the core controller deployment has the user-ca-bundle volume when cluster proxy is not configured")
 		Eventually(func(g Gomega) {
 			deployment, err := suiteClientset.AppsV1().Deployments(operandNamespace).Get(ctx, externalsecrets.OperandCoreControllerDeployment, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			assertHasUserCABundleVolume(g, deployment.Spec.Template.Spec.Volumes, trustedCABundleTestCMName)
 			assertHasSSLCertDir(g, deployment.Spec.Template.Spec.Containers, externalsecrets.OperandCoreControllerContainer)
 		}, time.Minute, 5*time.Second).Should(Succeed(),
-			"volume should be mounted when CNO label is present but no proxy is configured")
+			"volume should be mounted when CNO label is present but cluster proxy is not configured")
 	})
 })
 
@@ -436,6 +453,38 @@ func assertDoesNotHaveUserCABundleVolume(g Gomega, volumes []corev1.Volume) {
 		g.Expect(v.Name).NotTo(Equal(externalsecrets.UserCABundleVolumeName),
 			"volumes should not contain %s", externalsecrets.UserCABundleVolumeName)
 	}
+}
+
+func assertHasProxyTrustedCABundleVolume(g Gomega, volumes []corev1.Volume) {
+	g.Expect(volumes).To(ContainElement(
+		SatisfyAll(
+			HaveField("Name", externalsecrets.ProxyTrustedCABundleVolumeName),
+			HaveField("VolumeSource.ConfigMap", Not(BeNil())),
+			HaveField("VolumeSource.ConfigMap.LocalObjectReference.Name", externalsecrets.ProxyTrustedCABundleConfigMapName),
+		),
+	), "volumes should contain %s sourced from ConfigMap %s",
+		externalsecrets.ProxyTrustedCABundleVolumeName, externalsecrets.ProxyTrustedCABundleConfigMapName)
+}
+
+func isOpenShiftClusterProxyConfigured(ctx context.Context) bool {
+	proxyGVR := schema.GroupVersionResource{
+		Group:    "config.openshift.io",
+		Version:  "v1",
+		Resource: "proxies",
+	}
+	proxyCR, err := suiteDynamicClient.Resource(proxyGVR).Get(ctx, common.ExternalSecretsConfigObjectName, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	for _, section := range []string{"status", "spec"} {
+		httpProxy, _, _ := unstructured.NestedString(proxyCR.Object, section, "httpProxy")
+		httpsProxy, _, _ := unstructured.NestedString(proxyCR.Object, section, "httpsProxy")
+		noProxy, _, _ := unstructured.NestedString(proxyCR.Object, section, "noProxy")
+		if httpProxy != "" || httpsProxy != "" || noProxy != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func assertHasUserCABundleMount(g Gomega, containers []corev1.Container, containerName string) {

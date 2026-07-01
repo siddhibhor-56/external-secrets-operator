@@ -44,7 +44,7 @@ import (
 
 const (
 	// AWSCredSecretName and AWSCredNamespace are the fixed name and namespace for the K8s secret
-	// that holds AWS credentials (e.g. for Platform:AWS and CrossPlatform:GCP-AWS e2e). Document in docs/e2e.
+	// that holds AWS credentials (e.g. for Provider:AWS e2e on Platform:AWS or Platform:GCP). Document in test/e2e/README.md.
 	AWSCredSecretName             = "aws-creds"
 	AWSCredNamespace              = "kube-system"
 	awsCredSecretName             = AWSCredSecretName
