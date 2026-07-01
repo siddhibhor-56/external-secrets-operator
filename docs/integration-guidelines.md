@@ -77,9 +77,9 @@ The reconciler returns an irrecoverable error if `RELATED_IMAGE_EXTERNAL_SECRETS
 
 ## Label and Annotation Conventions
 
-- All managed resources carry `app: external-secrets` label (cache filter key).
-- Default labels: `app`, `app.kubernetes.io/version`, `app.kubernetes.io/managed-by: external-secrets-operator`, `app.kubernetes.io/part-of: external-secrets-operator`.
-- Disallowed label prefixes (rejected silently): `app.kubernetes.io/`, `external-secrets.io/`, `rbac.authorization.k8s.io/`, `servicebinding.io/controller`, `app`.
+- All managed resources carry `app: external-secrets` label (cache filter key). This label is set programmatically by the operator and is not user-configurable.
+- Default labels (operator-managed): `app`, `app.kubernetes.io/version`, `app.kubernetes.io/managed-by: external-secrets-operator`, `app.kubernetes.io/part-of: external-secrets-operator`.
+- Disallowed label prefixes for **user-supplied** labels (rejected silently via `disallowedLabelMatcher`): `app.kubernetes.io/`, `external-secrets.io/`, `rbac.authorization.k8s.io/`, `servicebinding.io/controller`, `app`. Users cannot override operator-managed labels through the CR; the operator sets these itself.
 - Disallowed annotation domain prefixes (rejected by CRD CEL validation): `kubernetes.io/`, `k8s.io/`, `openshift.io/`, `cert-manager.io/`.
 - Managed annotation keys are tracked in a base64-encoded JSON array on the CR annotation `externalsecretsconfig.operator.openshift.io/managed-annotations`.
 

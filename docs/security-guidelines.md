@@ -49,9 +49,11 @@ Key convention: The controller ClusterRole grants `secrets` verbs `get/list/watc
 ## RBAC Label Protection
 
 The regex `disallowedLabelMatcher` in `install_external_secrets.go` prevents users from overriding internal labels via `ControllerConfig.Labels`:
-```
+
+```regex
 ^app.kubernetes.io\/|^external-secrets.io\/|^rbac.authorization.k8s.io\/|^servicebinding.io\/controller$|^app$
 ```
+
 When adding new internal labels, add them to this regex.
 
 ## Annotation Domain Restrictions

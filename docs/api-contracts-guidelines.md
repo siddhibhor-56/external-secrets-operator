@@ -1,5 +1,9 @@
 # API Contracts Guidelines
 
+## General Rules
+
+- **No functions in the API package.** The `api/v1alpha1/` package must contain only type definitions, constants, markers, and generated code (deepcopy). Business logic, helpers, and utility functions belong in `pkg/controller/` or `pkg/operator/`. This keeps the API package purely declarative and avoids unintentional coupling between API and implementation.
+
 ## API Group and Versioning
 
 - Group: `operator.openshift.io`, Version: `v1alpha1`. All types live in `api/v1alpha1/`.
@@ -20,7 +24,8 @@ Both are enforced singletons via CEL: `self.metadata.name == 'cluster'`. Both us
 ## Required Kubebuilder Markers on CRD Types
 
 Every root CRD type must carry these markers:
-```
+
+```go
 +genclient
 +genclient:nonNamespaced
 +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -101,7 +106,9 @@ All controllers follow the same retry-on-conflict pattern:
 
 ## Defaults
 
-Use `+kubebuilder:default` for server-side defaulting:
+**Going forward:** prefer defaulting within the controller, not in the CRD schema. Per OpenShift API conventions: *"With configuration APIs, we typically default fields within the controller and not within the API. This means that the platform has the ability to make changes to the defaults over time."* New fields should omit `+kubebuilder:default` and instead apply defaults at reconcile time so the operator retains the ability to evolve defaults across releases without requiring CRD schema migrations.
+
+The following existing fields already use `+kubebuilder:default` (legacy; do not add more):
 - `logLevel`: 1
 - `mode`: `Disabled`
 - `injectAnnotations`: `"false"`
@@ -145,13 +152,24 @@ Run API tests with `make test-apis` or via the general `make test`.
 
 This operator does NOT use kubebuilder-generated admission webhooks for its own CRDs. CEL-based CRD validation handles all admission validation. The webhook code in `pkg/controller/external_secrets/` manages the upstream external-secrets operand's `ValidatingWebhookConfiguration` resources (not the operator's own API validation).
 
+## Godoc Requirements
+
+Every exported field in `api/v1alpha1/` types must have a Godoc comment that:
+- Explains the field's **purpose** clearly enough for an end user unfamiliar with the implementation.
+- Documents **interactions** with other fields (e.g., "Only relevant when `certManager.mode` is `Enabled`").
+- States **limitations** or constraints (e.g., max length, immutability, allowed values).
+- Describes **default behavior** when the field is omitted or zero-valued.
+
+The Godoc comment on any API field serves as the primary user-facing documentation and is extracted into generated API reference docs (`make docs`). Write for the audience of a cluster administrator, not an operator developer.
+
 ## Adding New API Fields Checklist
 
 1. Add the Go field to the appropriate struct in `api/v1alpha1/`.
-2. Add validation markers (min/max, enum, XValidation) for spec fields; status fields typically omit validation.
-3. Use pointer types for optional sub-structs; value types for required scalars with defaults.
-4. Add `+optional` or `+required` marker. Use `json:"fieldName,omitempty"` for optional fields.
-5. Exception: listMapKey fields must NOT have `omitempty`; add `//nolint:kubeapilinter` with reason.
-6. Write test cases in the corresponding `.testsuite.yaml` for both valid and invalid inputs.
-7. Run `make update && make verify` to regenerate and validate all artifacts.
-8. If the field adds a new condition type or reason, add constants in `conditions.go`.
+2. Write a Godoc comment on the field covering purpose, interactions, limitations, and default behavior (see Godoc Requirements above).
+3. Add validation markers (min/max, enum, XValidation) for spec fields; status fields typically omit validation.
+4. Use pointer types for optional sub-structs; value types for required scalars with defaults.
+5. Add `+optional` or `+required` marker. Use `json:"fieldName,omitempty"` for optional fields.
+6. Exception: listMapKey fields must NOT have `omitempty`; add `//nolint:kubeapilinter` with reason.
+7. Write test cases in the corresponding `.testsuite.yaml` for both valid and invalid inputs.
+8. Run `make update && make verify` to regenerate and validate all artifacts.
+9. If the field adds a new condition type or reason, add constants in `conditions.go`.

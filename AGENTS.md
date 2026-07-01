@@ -25,7 +25,7 @@ Three controllers run in a single binary:
 
 ## Project Structure
 
-```
+```text
 api/v1alpha1/           CRD type definitions, conditions, shared types, deepcopy
 api/v1alpha1/tests/     Declarative YAML test suites for CRD validation
 bindata/                Static operand YAML manifests (compiled into Go via go-bindata)

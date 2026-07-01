@@ -10,7 +10,7 @@ For contribution process, see `CONTRIBUTING.md`.
 
 On the highest level, this is a Kubernetes operator that installs and manages the upstream [external-secrets](https://github.com/external-secrets/external-secrets) application on OpenShift clusters. The upstream project provides the actual secret-syncing logic (ExternalSecret, SecretStore, etc.). This operator does **not** embed or fork that code. Instead, it manages upstream resources as a set of static YAML manifests that are compiled into the binary, decoded at runtime, mutated with operator-controlled configuration, and applied imperatively to the cluster.
 
-```
+```text
                   ┌─────────────────────────────────────────────┐
                   │        ExternalSecretsConfig CR              │
                   │   (singleton "cluster", user-facing API)     │
@@ -92,7 +92,7 @@ The heart of the operator. Three controller packages plus shared infrastructure:
 
 The main reconciliation controller. Watches `ExternalSecretsConfig`, `ExternalSecretsManager`, and all managed operand resources. The reconciliation flow in `install_external_secrets.go` creates resources in strict dependency order:
 
-```
+```text
 Namespace → NetworkPolicies → ServiceAccounts → Certificates → Secrets
 → TrustedCA ConfigMap → RBAC → Services → Deployments
 → ValidatingWebhooks → CR annotation tracking
