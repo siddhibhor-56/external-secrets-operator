@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,6 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:deepcopy-gen=package
+package content
 
-package autoscaling
+import (
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/api/validate/constraints"
+)
+
+// MinError returns a string explanation of a "must be greater than or equal"
+// validation failure.
+func MinError[T constraints.Integer](min T) string {
+	return fmt.Sprintf("must be greater than or equal to %d", min)
+}

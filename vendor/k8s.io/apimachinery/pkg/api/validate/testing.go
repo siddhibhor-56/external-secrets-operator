@@ -14,12 +14,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:deepcopy-gen=package
-// +groupName=
+package validate
 
-// Package core contains the latest (or "internal") version of the
-// Kubernetes API objects. This is the API objects as represented in memory.
-// The contract presented to clients is located in the versioned packages,
-// which are sub-directories. The first one is "v1". Those packages
-// describe how a particular version is serialized to storage/network.
-package core
+import (
+	"context"
+
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+)
+
+// FixedResult asserts a fixed boolean result.  This is mostly useful for
+// testing.
+func FixedResult[T any](_ context.Context, op operation.Operation, fldPath *field.Path, value, _ T, result bool, arg string) field.ErrorList {
+	if result {
+		return nil
+	}
+	return field.ErrorList{
+		field.Invalid(fldPath, value, "forced failure: "+arg).WithOrigin("validateFalse"),
+	}
+}
