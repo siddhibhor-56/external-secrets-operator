@@ -1,6 +1,6 @@
 module github.com/openshift/external-secrets-operator
 
-go 1.26.5
+go 1.26.3
 
 require (
 	github.com/aws/aws-sdk-go v1.55.7
