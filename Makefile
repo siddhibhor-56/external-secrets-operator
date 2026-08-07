@@ -92,6 +92,14 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= podman
 
+# Map the invoking host user into a container so bind-mount writes are owned
+# correctly (podman: keep-id; docker: numeric --user).
+ifeq ($(CONTAINER_TOOL),podman)
+CONTAINER_USER_FLAGS ?= --userns=keep-id
+else
+CONTAINER_USER_FLAGS ?= --user $(shell id -u):$(shell id -g)
+endif
+
 # GO_PACKAGE is the Go module path (used for ldflags to embed version info).
 GO_PACKAGE ?= github.com/openshift/external-secrets-operator
 
@@ -138,6 +146,10 @@ KUBE_API_LINT = $(LOCALBIN)/kube-api-linter.so
 OPERATOR_SDK_VERSION ?= v1.39.0
 YQ_VERSION = v4.50.1
 HELM_VERSION ?= v3.17.3
+
+# Image tag produced by markdownlint-image; base image for that Dockerfile.
+MARKDOWNLINT_IMAGE ?= external-secrets-operator-markdownlint:latest
+MARKDOWNLINT_BASE_IMAGE ?= mirror.gcr.io/library/node@sha256:76789712cd1ae89a1225eac9077010d68987a423588042dac30446f502f1858c
 
 # Include the library makefiles only when vendored (so e.g. `make update-vendor` works on a clean tree).
 BUILD_MACHINERY_GO_MAKE := $(PROJECT_ROOT)/vendor/github.com/openshift/build-machinery-go/make
@@ -241,6 +253,24 @@ lint: $(GOLANGCI_LINT) $(KUBE_API_LINT) ## Run golangci-lint linter.
 lint-fix: $(GOLANGCI_LINT) ## Run golangci-lint linter and perform fixes.
 	@echo "Running go linter with auto-fix..."
 	@$(GOLANGCI_LINT) run --verbose --fix --config .golangci.yml
+
+.PHONY: markdownlint-image
+markdownlint-image: ## Build MARKDOWNLINT_IMAGE from hack/Dockerfile.markdownlint.
+	@echo "Building markdownlint image $(MARKDOWNLINT_IMAGE)..."
+	@$(CONTAINER_TOOL) build \
+		--build-arg MARKDOWNLINT_BASE_IMAGE=$(MARKDOWNLINT_BASE_IMAGE) \
+		-f hack/Dockerfile.markdownlint \
+		-t $(MARKDOWNLINT_IMAGE) .
+
+.PHONY: lint-markdown
+lint-markdown: ## Run markdownlint-cli2 (config: .markdownlint-cli2.yaml).
+	@echo "Running markdownlint..."
+	@$(call run-markdownlint,)
+
+.PHONY: lint-markdown-fix
+lint-markdown-fix: ## Run markdownlint-cli2 --fix.
+	@echo "Running markdownlint with auto-fix..."
+	@$(call run-markdownlint,--fix)
 
 ##@ Build
 
@@ -370,6 +400,36 @@ go build -mod=vendor -o $${bin_path} $${package}; \
 }
 endef
 
+# run-markdownlint $(1)
+# $(1): args forwarded to markdownlint-cli2 (e.g. --fix).
+# Resolution order:
+#   1. markdownlint-cli2 on PATH -> hack/markdownlint.sh
+#   2. OPENSHIFT_CI=true and missing binary -> error
+#   3. else -> build MARKDOWNLINT_IMAGE and podman/docker run
+# --fix uses a writable mount and CONTAINER_USER_FLAGS; lint-only mounts :ro,Z.
+define run-markdownlint
+if command -v markdownlint-cli2 >/dev/null 2>&1; then \
+	./hack/markdownlint.sh $(1); \
+elif [ "$${OPENSHIFT_CI:-}" = "true" ]; then \
+	echo "markdownlint-cli2 not found on PATH (OPENSHIFT_CI=true)." >&2; \
+	exit 1; \
+else \
+	$(MAKE) markdownlint-image; \
+	if [ "$(1)" = "--fix" ]; then \
+		$(CONTAINER_TOOL) run --rm \
+			$(CONTAINER_USER_FLAGS) \
+			-v $(PROJECT_ROOT):/workdir:Z \
+			-w /workdir \
+			$(MARKDOWNLINT_IMAGE) $(1); \
+	else \
+		$(CONTAINER_TOOL) run --rm \
+			-v $(PROJECT_ROOT):/workdir:ro,Z \
+			-w /workdir \
+			$(MARKDOWNLINT_IMAGE) $(1); \
+	fi; \
+fi
+endef
+
 $(OPERATOR_SDK): ## Download operator-sdk locally if necessary.
 ifeq (,$(wildcard $(OPERATOR_SDK)))
 ifeq (,$(shell which operator-sdk 2>/dev/null))
@@ -460,7 +520,7 @@ catalog-push: ## Push a catalog image.
 ##@ Verification
 
 .PHONY: verify
-verify: vet fmt verify-deps verify-bindata verify-bindata-assets verify-generated govulncheck check-git-diff ## Verify the changes are working as expected.
+verify: vet fmt verify-deps verify-bindata verify-bindata-assets verify-generated govulncheck lint-markdown check-git-diff ## Verify the changes are working as expected.
 
 .PHONY: check-git-diff
 check-git-diff: update ## Check for any uncommitted changes including untracked files.
