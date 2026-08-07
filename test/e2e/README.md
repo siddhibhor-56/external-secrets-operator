@@ -42,7 +42,7 @@ make test-e2e E2E_GINKGO_LABEL_FILTER=""
 
 `make test-e2e` uses:
 
-```
+```text
 Platform: isSubsetOf {AWS,Generic} && !(Feature: containsAny {Proxy, Upgrade}) && !(Provider: containsAny Bitwarden)
 ```
 
@@ -195,7 +195,7 @@ Files written on every run:
 
 When a spec in the main e2e describe fails, a snapshot is also written to:
 
-```
+```text
 _output/e2e-artifacts/failure-<timestamp>/
 ├── pods/       # last 500 log lines and describe YAML per pod (operator, operand, test namespaces)
 ├── events/     # recent events per namespace

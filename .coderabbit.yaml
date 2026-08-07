@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# See https://docs.coderabbit.ai/reference/configuration for all fields and default values
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - "harness-evals/harness-docs/*-guidelines.md"
+      - "AGENTS.md"
+      - "CONTRIBUTING.md"
+reviews:
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  commit_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  path_instructions:
+    - path: "api/v1alpha1/**"
+      instructions: |
+        Review CRD type changes for CEL validation rules, immutability markers,
+        bounds constraints, and corresponding .testsuite.yaml test coverage.
+        See harness-evals/harness-docs/api-contracts-guidelines.md.
+    - path: "pkg/controller/**"
+      instructions: |
+        Check error classification (IrrecoverableError/RetryRequiredError/UserConfigurationError),
+        requeue behavior, and that new managed resources are registered in
+        controllerManagedResources and HasObjectChanged. See harness-evals/harness-docs/error-handling-guidelines.md
+        and harness-evals/harness-docs/performance-guidelines.md.
+  tools:
+    github-checks:
+      timeout_ms: 120000
+chat:
+  auto_reply: true
+code_generation:
+  docstrings: false
+instructions:
+  review: |
+    IMPORTANT: The following PR metadata checks are mandatory requirements,
+    not suggestions. Report violations as actionable review comments with
+    severity "important" or "warning", NOT as nitpicks.
+
+    **Commit messages** (REQUIRED): Every commit MUST follow the format
+    `<JIRA-ID>: short imperative description` (e.g., `ESO-142: add proxy egress
+    network policy`). The Jira project can be any valid project (ESO, OAPE, etc.).
+    Reject commits with generic messages like "fix bug", "update code",
+    "address review comments", or commits missing a Jira ticket number.
+
+    **PR title** (REQUIRED): MUST be concise (<70 chars), imperative, and
+    include the Jira ticket number (e.g., "ESO-142: Add proxy egress network
+    policy"). Reject titles that are vague or missing the ticket number.
+
+    **PR description** (REQUIRED): MUST explain what changed, why, and how.
+    Reject PRs with empty or minimal descriptions that don't help reviewers
+    understand the motivation.

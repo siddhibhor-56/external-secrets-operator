@@ -37,23 +37,27 @@ Documenting anti-patterns helps:
 Based on common Kubernetes operator issues, watch for:
 
 ### Controller Patterns
+
 - [ ] **Unbounded Reconciliation** - Missing rate limiting or exponential backoff
 - [ ] **Status Update Loops** - Status updates triggering unnecessary reconciliations
 - [ ] **Missing Finalizers** - Resources not properly cleaned up on deletion
 - [ ] **Blocking Reconciliation** - Long-running operations without context timeouts
 
 ### Cache & Client Patterns
+
 - [ ] **Cache Stampede** - All controllers resyncing simultaneously
 - [ ] **Over-caching** - Watching resources not actually used
 - [ ] **Direct API Calls** - Bypassing cache unnecessarily (use `UncachedClient` intentionally)
 - [ ] **Stale Reads** - Not handling cache sync properly
 
 ### Resource Management
+
 - [ ] **Resource Leaks** - Not cleaning up created resources
 - [ ] **Owner Reference Missing** - Manual cleanup instead of garbage collection
 - [ ] **Unbounded Resource Creation** - No limits on child resources
 
 ### Error Handling
+
 - [ ] **Silent Failures** - Errors not surfaced to status or events
 - [ ] **Panic in Reconciliation** - Unhandled panics crashing controller
 - [ ] **Error Shadowing** - Generic errors hiding root cause
@@ -63,7 +67,8 @@ Based on common Kubernetes operator issues, watch for:
 When you discover an anti-pattern:
 
 1. **Create a new document** following this structure:
-   ```
+
+   ```markdown
    # Anti-Pattern: [Name]
 
    ## Problem
@@ -98,6 +103,7 @@ When you discover an anti-pattern:
 ## References
 
 ### Best Practices
+
 - [Controller-Runtime Best Practices](https://pkg.go.dev/sigs.k8s.io/controller-runtime)
 - [Kubernetes Operator Patterns](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/)
 - [Kubebuilder Book](https://book.kubebuilder.io/)
@@ -115,4 +121,3 @@ Found an anti-pattern? Document it here! Include:
 
 **Maintained by:** External Secrets Operator Team  
 **Last Updated:** 2025-10-19
-
