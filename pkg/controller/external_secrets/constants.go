@@ -26,6 +26,8 @@ const (
 	OperandWebhookDeployment = externalsecretsCommonName + "-webhook"
 	// OperandCertControllerDeployment is the in-tree cert-controller Deployment name.
 	OperandCertControllerDeployment = externalsecretsCommonName + "-cert-controller"
+	// OperandBitwardenSDKServerDeployment is the bitwarden-sdk-server Deployment name.
+	OperandBitwardenSDKServerDeployment = "bitwarden-sdk-server"
 
 	// OperandCoreControllerContainer is the core controller container name.
 	OperandCoreControllerContainer = externalsecretsCommonName
@@ -109,6 +111,15 @@ const (
 	// bitwardenImageVersionEnvVarName is the environment variable key name
 	// containing the image version of the bitwarden-sdk-server as value.
 	bitwardenImageVersionEnvVarName = "BITWARDEN_SDK_SERVER_IMAGE_VERSION"
+
+	// OperandExternalSecretsArgsEnvVar is the operator env var for core controller container args overrides.
+	OperandExternalSecretsArgsEnvVar = "OPERAND_EXTERNAL_SECRETS_ARGS"
+	// OperandWebhookArgsEnvVar is the operator env var for webhook container args overrides.
+	OperandWebhookArgsEnvVar = "OPERAND_WEBHOOK_ARGS"
+	// OperandCertControllerArgsEnvVar is the operator env var for cert-controller container args overrides.
+	OperandCertControllerArgsEnvVar = "OPERAND_CERT_CONTROLLER_ARGS"
+	// OperandBitwardenSDKServerArgsEnvVar is the operator env var for bitwarden-sdk-server container args overrides.
+	OperandBitwardenSDKServerArgsEnvVar = "OPERAND_BITWARDEN_SDK_SERVER_ARGS"
 
 	// certmanagerTLSSecretWebhook is the TLS secret created by cert-manager for the webhook component. A different
 	// name is used to avoiding clash with the secret created by the inbuilt cert-controller component.
