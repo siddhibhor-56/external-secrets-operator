@@ -28,6 +28,7 @@ make test-e2e E2E_GINKGO_LABEL_FILTER=""
 | Value | Test area |
 |-------|-----------|
 | `OverrideEnv` | Custom env vars on operand deployments |
+| `OverrideOperandArgs` | Operator `OPERAND_*_ARGS` env overrides for operand Deployments |
 | `RevisionHistoryLimit` | Deployment revision history limits |
 | `UnsafeAllowGenericTargets` | ExternalSecretsManager feature gate propagation |
 | `CustomAnnotations` | Annotation apply/remove and managed-annotation restoration |
@@ -93,6 +94,7 @@ If a prerequisite is missing, the affected spec **fails** with a message pointin
 | `Feature:Upgrade` | Post-upgrade network policy migration check |
 | `Feature:NetworkPolicy` | Static and custom network policy naming |
 | `Feature:OverrideEnv` | Component override env vars |
+| `Feature:OverrideOperandArgs` | Operator `OPERAND_*_ARGS` env overrides for operand Deployments |
 | `Feature:RevisionHistoryLimit` | Revision history limit defaults and overrides |
 | `Feature:UnsafeAllowGenericTargets` | UnsafeAllowGenericTargets feature propagation |
 | `Feature:CustomAnnotations` | Annotation lifecycle tests |
@@ -142,6 +144,12 @@ File: `e2e_test.go`
 | `NetworkPolicy` | Static Network Policy Naming; Custom Network Policy Naming |
 | `NetworkPolicy` + `Upgrade` | Post-upgrade skip-np-cleanup-check annotation (also tagged `Feature:Upgrade`) |
 | `Proxy` | Proxy Egress Network Policy |
+
+File: `operand_args_test.go`
+
+| Feature | Describe |
+|---------|----------|
+| `OverrideOperandArgs` | Operand Args Env Overrides |
 
 File: `trusted_ca_bundle_test.go`
 

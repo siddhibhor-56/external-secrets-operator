@@ -418,20 +418,12 @@ func setTrustedCABundle(ctx context.Context, cmName, key string) {
 }
 
 func isExternalSecretsConfigDegraded(ctx context.Context) bool {
-	u, err := suiteDynamicClient.Resource(operatorv1alpha1.ExternalSecretsConfigGVR).Get(ctx, common.ExternalSecretsConfigObjectName, metav1.GetOptions{})
-	if err != nil {
+	esc := &operatorv1alpha1.ExternalSecretsConfig{}
+	if err := suiteRuntimeClient.Get(ctx, client.ObjectKey{Name: common.ExternalSecretsConfigObjectName}, esc); err != nil {
 		return false
 	}
-	conds, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
-	if !found {
-		return false
-	}
-	for _, c := range conds {
-		cond, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Degraded" && cond["status"] == "True" {
+	for _, cond := range esc.Status.Conditions {
+		if cond.Type == operatorv1alpha1.Degraded && cond.Status == metav1.ConditionTrue {
 			return true
 		}
 	}
