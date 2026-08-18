@@ -19,13 +19,16 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	configv1 "github.com/openshift/api/config/v1"
+
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/operator/assets"
+	"github.com/openshift/external-secrets-operator/pkg/tlsprofile"
 )
 
 // createOrApplyDeployments ensures required Deployment resources exist and are correctly configured.
-func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, externalSecretsConfigCreateRecon bool) error {
+func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, externalSecretsConfigCreateRecon bool, tlsSpec *configv1.TLSProfileSpec) error {
 	// Define all Deployment assets to apply based on conditions.
 	deployments := []struct {
 		assetName string
@@ -54,7 +57,7 @@ func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecr
 		if !d.condition {
 			continue
 		}
-		if err := r.createOrApplyDeploymentFromAsset(esc, d.assetName, resourceMetadata, externalSecretsConfigCreateRecon); err != nil {
+		if err := r.createOrApplyDeploymentFromAsset(esc, d.assetName, resourceMetadata, externalSecretsConfigCreateRecon, tlsSpec); err != nil {
 			return err
 		}
 	}
@@ -67,9 +70,9 @@ func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecr
 }
 
 func (r *Reconciler) createOrApplyDeploymentFromAsset(esc *operatorv1alpha1.ExternalSecretsConfig, assetName string, resourceMetadata common.ResourceMetadata,
-	externalSecretsConfigCreateRecon bool,
+	externalSecretsConfigCreateRecon bool, tlsSpec *configv1.TLSProfileSpec,
 ) error {
-	deployment, trustedCAErr := r.getDeploymentObject(assetName, esc, resourceMetadata)
+	deployment, trustedCAErr := r.getDeploymentObject(assetName, esc, resourceMetadata, tlsSpec)
 	// trustedCABundle may fail in getDeploymentObject (e.g. missing ConfigMap) while still
 	// returning a deployment with the stale user-ca-bundle mount removed. Apply that spec
 	// first, then return the error so status becomes Degraded and the reconcile requeues.
@@ -110,7 +113,7 @@ func (r *Reconciler) createOrApplyDeploymentFromAsset(esc *operatorv1alpha1.Exte
 	return trustedCAErr
 }
 
-func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata) (*appsv1.Deployment, error) {
+func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, tlsSpec *configv1.TLSProfileSpec) (*appsv1.Deployment, error) {
 	deployment := common.DecodeDeploymentObjBytes(assets.MustAsset(assetName))
 	updateNamespace(deployment, esc)
 	common.ApplyResourceMetadata(deployment, resourceMetadata)
@@ -130,6 +133,7 @@ func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1
 	switch assetName {
 	case controllerDeploymentAssetName:
 		r.updateContainerSpec(deployment, esc, image, logLevel)
+		appendTLSArgs(deployment, OperandCoreControllerContainer, tlsprofile.ExternalSecretsControllerTLSArgs(tlsSpec))
 		if err := r.applyUserCABundleConfig(deployment, esc); err != nil {
 			wrapped := fmt.Errorf("failed to apply user CA bundle config: %w", err)
 			// When the referenced ConfigMap is missing, the deployment spec is updated to remove
@@ -146,9 +150,11 @@ func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1
 			checkInterval = normalizeDurationArg(esc.Spec.ApplicationConfig.WebhookConfig.CertificateCheckInterval.Duration.String())
 		}
 		updateWebhookContainerSpec(deployment, image, logLevel, checkInterval)
+		appendTLSArgs(deployment, OperandWebhookContainer, tlsprofile.ExternalSecretsWebhookTLSArgs(tlsSpec))
 		updateWebhookVolumeConfig(deployment, esc)
 	case certControllerDeploymentAssetName:
 		updateCertControllerContainerSpec(deployment, image, logLevel)
+		appendTLSArgs(deployment, OperandCertControllerContainer, tlsprofile.ExternalSecretsCertControllerTLSArgs(tlsSpec))
 	case bitwardenDeploymentAssetName:
 		deployment.Labels["app.kubernetes.io/version"] = os.Getenv(bitwardenImageVersionEnvVarName)
 		updateBitwardenServerContainerSpec(deployment, bitwardenImage)
@@ -183,6 +189,19 @@ func normalizeDurationArg(raw string) string {
 		return raw
 	}
 	return d.String()
+}
+
+// appendTLSArgs appends TLS CLI flags to the named container's args within the deployment.
+func appendTLSArgs(deployment *appsv1.Deployment, containerName string, tlsArgs []string) {
+	if len(tlsArgs) == 0 {
+		return
+	}
+	for i, container := range deployment.Spec.Template.Spec.Containers {
+		if container.Name == containerName {
+			deployment.Spec.Template.Spec.Containers[i].Args = append(deployment.Spec.Template.Spec.Containers[i].Args, tlsArgs...)
+			return
+		}
+	}
 }
 
 // updatePodTemplateLabels sets labels on the pod template spec.

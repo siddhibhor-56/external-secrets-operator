@@ -36,9 +36,6 @@ func (r *Reconciler) reconcileExternalSecretsDeployment(esc *operatorv1alpha1.Ex
 	}
 
 	// Resolve cluster TLS profile for operand deployments.
-	// TODO: once the upstream external-secrets operand supports --tls-min-version,
-	// --tls-ciphers, and --tls-curve-preferences flags, pass tlsSpec to
-	// createOrApplyDeployments and inject the flags into container args.
 	tlsSpec, err := tlsprofile.ResolveHonoredTLSProfile(
 		r.ctx,
 		tlsprofile.NewClientReaderAPIServerFetch(r.CtrlClient),
@@ -101,7 +98,7 @@ func (r *Reconciler) reconcileExternalSecretsDeployment(esc *operatorv1alpha1.Ex
 		return err
 	}
 
-	if err := r.createOrApplyDeployments(esc, resourceMetadata, recon); err != nil {
+	if err := r.createOrApplyDeployments(esc, resourceMetadata, recon, tlsSpec); err != nil {
 		r.log.Error(err, "failed to reconcile deployment resource")
 		return err
 	}

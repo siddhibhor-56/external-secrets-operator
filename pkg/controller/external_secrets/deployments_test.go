@@ -825,7 +825,7 @@ func TestCreateOrApplyDeployments(t *testing.T) {
 			}
 			t.Setenv("RELATED_IMAGE_BITWARDEN_SDK_SERVER", commontest.TestBitwardenImageName)
 
-			err := r.createOrApplyDeployments(externalsecrets, testResourceMetadata(externalsecrets), false)
+			err := r.createOrApplyDeployments(externalsecrets, testResourceMetadata(externalsecrets), false, nil)
 			if (tt.wantErr != "" || err != nil) && (err == nil || err.Error() != tt.wantErr) {
 				t.Errorf("createOrApplyDeployments() err: %v, wantErr: %v", err, tt.wantErr)
 			}
@@ -2444,7 +2444,7 @@ func TestCreateOrApplyDeploymentFromAssetReturnsTrustedCAError(t *testing.T) {
 			return true, nil
 		})
 
-		err := r.createOrApplyDeploymentFromAsset(esc, controllerDeploymentAssetName, resourceMetadata, false)
+		err := r.createOrApplyDeploymentFromAsset(esc, controllerDeploymentAssetName, resourceMetadata, false, nil)
 		if err == nil {
 			t.Fatal("createOrApplyDeploymentFromAsset() error = nil, want TrustedCABundleError")
 		}
@@ -2464,7 +2464,7 @@ func TestCreateOrApplyDeploymentFromAssetReturnsTrustedCAError(t *testing.T) {
 			return nil
 		})
 
-		err := r.createOrApplyDeploymentFromAsset(esc, controllerDeploymentAssetName, resourceMetadata, false)
+		err := r.createOrApplyDeploymentFromAsset(esc, controllerDeploymentAssetName, resourceMetadata, false, nil)
 		if err == nil {
 			t.Fatal("createOrApplyDeploymentFromAsset() error = nil, want TrustedCABundleError")
 		}
