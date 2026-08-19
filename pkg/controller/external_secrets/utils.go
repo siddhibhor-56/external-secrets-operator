@@ -16,6 +16,8 @@ import (
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.uber.org/zap/zapcore"
 
@@ -264,6 +266,46 @@ func (r *Reconciler) isProxyEnabled() bool {
 func hasManagedOrWatchLabel(labels map[string]string) bool {
 	return labels[ManagedResourceLabelKey] == ManagedResourceLabelValue ||
 		labels[WatchedResourceLabelKey] == WatchedResourceLabelValue
+}
+
+// isManagedResource reports whether object is an operator-managed operand resource.
+func isManagedResource(object client.Object) bool {
+	if object == nil {
+		return false
+	}
+	labels := object.GetLabels()
+	return labels != nil && labels[ManagedResourceLabelKey] == ManagedResourceLabelValue
+}
+
+// isManagedOrWatchedResource reports whether object is an operator-managed operand or a
+// user-provided resource labeled for passive watch (e.g. trustedCABundle ConfigMaps).
+func isManagedOrWatchedResource(object client.Object) bool {
+	if object == nil {
+		return false
+	}
+	labels := object.GetLabels()
+	return labels != nil && hasManagedOrWatchLabel(labels)
+}
+
+// labelMatchPredicate builds a predicate that admits events when the supplied match
+// function returns true. On Update events it evaluates both ObjectOld and ObjectNew so
+// that reconciliation still fires when a qualifying label is removed externally (the old
+// object matches even though the new one does not).
+func labelMatchPredicate(match func(client.Object) bool) predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return match(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return match(e.ObjectOld) || match(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return match(e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return match(e.Object)
+		},
+	}
 }
 
 // getWithCacheFallback reads a resource from the manager cache first. On IsNotFound it
