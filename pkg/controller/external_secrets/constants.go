@@ -6,6 +6,7 @@ import (
 
 	certmanagerapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager"
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 )
 
@@ -15,6 +16,72 @@ const (
 
 	// ControllerName is the name of the controller used in logs and events.
 	ControllerName = externalsecretsCommonName + "-controller"
+
+	// OperandDefaultNamespace is the default namespace for the external-secrets operand.
+	OperandDefaultNamespace = externalsecretsCommonName
+
+	// OperandCoreControllerDeployment is the core external-secrets controller Deployment name.
+	OperandCoreControllerDeployment = externalsecretsCommonName
+	// OperandWebhookDeployment is the external-secrets webhook Deployment name.
+	OperandWebhookDeployment = externalsecretsCommonName + "-webhook"
+	// OperandCertControllerDeployment is the in-tree cert-controller Deployment name.
+	OperandCertControllerDeployment = externalsecretsCommonName + "-cert-controller"
+	// OperandBitwardenSDKServerDeployment is the bitwarden-sdk-server Deployment name.
+	OperandBitwardenSDKServerDeployment = "bitwarden-sdk-server"
+
+	// OperandCoreControllerContainer is the core controller container name.
+	OperandCoreControllerContainer = externalsecretsCommonName
+	// OperandWebhookContainer is the webhook container name.
+	OperandWebhookContainer = "webhook"
+	// OperandCertControllerContainer is the cert-controller container name.
+	OperandCertControllerContainer = "cert-controller"
+
+	// UnsafeAllowGenericTargetsArg is the core controller argument that enables generic target support.
+	UnsafeAllowGenericTargetsArg = "--unsafe-allow-generic-targets=true"
+
+	// OperandBitwardenContainer is the bitwarden container name.
+	OperandBitwardenContainer = "bitwarden-sdk-server"
+
+	// OperandCoreControllerPodPrefix matches the core controller pod name prefix.
+	OperandCoreControllerPodPrefix = OperandCoreControllerDeployment + "-"
+	// OperandWebhookPodPrefix matches the webhook pod name prefix.
+	OperandWebhookPodPrefix = OperandWebhookDeployment + "-"
+	// OperandCertControllerPodPrefix matches the cert-controller pod name prefix.
+	OperandCertControllerPodPrefix = OperandCertControllerDeployment + "-"
+
+	// ManagedResourceLabelKey identifies operator-managed operand resources.
+	// The controller uses this label on secondary watches to map event signals
+	// back to the primary ExternalSecretsConfig owner instance.
+	ManagedResourceLabelKey = "app"
+	// ManagedResourceLabelValue is the label value paired with ManagedResourceLabelKey.
+	ManagedResourceLabelValue = "external-secrets"
+	// WatchedResourceLabelKey is applied to user-provided resources referenced in
+	// ExternalSecretsConfig spec so changes enqueue reconciliation.
+	WatchedResourceLabelKey = "externalsecretsconfig.operator.openshift.io/watching"
+	// WatchedResourceLabelValue is paired with WatchedResourceLabelKey.
+	WatchedResourceLabelValue = "true"
+
+	// TrustedCABundleInjectLabel triggers OpenShift CNO to inject cluster-wide CA certificates.
+	TrustedCABundleInjectLabel = "config.openshift.io/inject-trusted-cabundle"
+
+	// ProxyTrustedCABundleConfigMapName is the operator-managed ConfigMap for proxy CA injection.
+	ProxyTrustedCABundleConfigMapName = externalsecretsCommonName + "-trusted-ca-bundle"
+	// ProxyTrustedCABundleVolumeName is the volume name for the proxy/CNO trusted CA bundle.
+	ProxyTrustedCABundleVolumeName = "trusted-ca-bundle"
+	// ProxyTrustedCABundleMountPath is where the proxy trusted CA bundle is mounted in containers.
+	ProxyTrustedCABundleMountPath = "/etc/pki/tls/certs"
+
+	// UserCABundleVolumeName is the volume name for a user-specified trustedCABundle ConfigMap.
+	UserCABundleVolumeName = "user-ca-bundle"
+	// UserCABundleMountPath is where the user CA bundle is mounted in the core controller.
+	UserCABundleMountPath = "/etc/pki/tls/user-certs"
+	// UserCABundleKeyPath is the ConfigMap data key and projected filename for the user CA bundle.
+	UserCABundleKeyPath = "ca-bundle.crt"
+
+	// SSLCertDirEnvVar tells Go's TLS library which directories to search for CA certificates.
+	SSLCertDirEnvVar = "SSL_CERT_DIR"
+	// SSLCertDirValue is set on the core controller when user trustedCABundle is configured.
+	SSLCertDirValue = "/etc/pki/tls/user-certs:/etc/pki/tls/certs:/etc/ssl/certs"
 
 	// finalizer name for externalsecretsconfigs.operator.openshift.io resource.
 	finalizer = "externalsecretsconfigs.operator.openshift.io/" + ControllerName
@@ -45,26 +112,22 @@ const (
 	// containing the image version of the bitwarden-sdk-server as value.
 	bitwardenImageVersionEnvVarName = "BITWARDEN_SDK_SERVER_IMAGE_VERSION"
 
-	// externalsecretsDefaultNamespace is the namespace where the `external-secrets` operand required resources
-	// will be created, when ExternalSecretsConfig.Spec.Namespace is not set.
-	externalsecretsDefaultNamespace = "external-secrets"
+	// TODO: Remove in v1.4.0. Backported to 1.1/1.2 as a temporary escape hatch;
+	// v1.3.0 adds ExternalSecretsConfig advancedOverrides for per-component Deployment
+	// overrides and is the migration window before these env vars are removed.
+	//
+	// OperandExternalSecretsArgsEnvVar is the operator env var for core controller container args overrides.
+	OperandExternalSecretsArgsEnvVar = "OPERAND_EXTERNAL_SECRETS_ARGS"
+	// OperandWebhookArgsEnvVar is the operator env var for webhook container args overrides.
+	OperandWebhookArgsEnvVar = "OPERAND_WEBHOOK_ARGS"
+	// OperandCertControllerArgsEnvVar is the operator env var for cert-controller container args overrides.
+	OperandCertControllerArgsEnvVar = "OPERAND_CERT_CONTROLLER_ARGS"
+	// OperandBitwardenSDKServerArgsEnvVar is the operator env var for bitwarden-sdk-server container args overrides.
+	OperandBitwardenSDKServerArgsEnvVar = "OPERAND_BITWARDEN_SDK_SERVER_ARGS"
 
 	// certmanagerTLSSecretWebhook is the TLS secret created by cert-manager for the webhook component. A different
 	// name is used to avoiding clash with the secret created by the inbuilt cert-controller component.
 	certmanagerTLSSecretWebhook = "external-secrets-webhook-cm"
-	// trustedCABundleConfigMapName is the name of the ConfigMap containing the trusted CA bundle.
-	trustedCABundleConfigMapName = externalsecretsCommonName + "-trusted-ca-bundle"
-
-	// trustedCABundleInjectLabel is the label that triggers OpenShift CNO to inject cluster-wide CA certificates.
-	trustedCABundleInjectLabel = "config.openshift.io/inject-trusted-cabundle"
-
-	// trustedCABundleVolumeName is the name of the volume for mounting the CA bundle.
-	trustedCABundleVolumeName = "trusted-ca-bundle"
-
-	// trustedCABundleMountPath is the path where the CA bundle should be mounted in containers
-	// Default certificate path is taken from the golang source:
-	// https://cs.opensource.google/go/go/+/refs/tags/go1.24.4:src/crypto/x509/root_linux.go;l=22
-	trustedCABundleMountPath = "/etc/pki/tls/certs"
 
 	// Proxy environment variable names (uppercase).
 	httpProxyEnvVar  = "HTTP_PROXY"
@@ -76,11 +139,21 @@ const (
 	httpsProxyEnvVarLowercase = "https_proxy"
 	noProxyEnvVarLowercase    = "no_proxy"
 
-	// specific containers when applying OverrideEnv configurations.
-	controllerContainerName     = "external-secrets"
-	webhookContainerName        = "webhook"
-	certControllerContainerName = "cert-controller"
-	bitwardenContainerName      = "bitwarden-sdk-server"
+	// systemNetworkPolicyPrefix is prepended to all operator-managed static network policy names.
+	systemNetworkPolicyPrefix = "eso-sys-"
+
+	// userNetworkPolicyPrefix is prepended to user-defined network policy names from the CR spec.
+	userNetworkPolicyPrefix = "eso-user-"
+
+	// TODO: Remove after 3 releases(in v1.5.0) once the migration from
+	// unprefixed to eso-sys-/eso-user- network policy names is no longer needed.
+	//
+	// skipNPCleanupAnnotation marks that the one-time migration cleanup of unprefixed
+	// network policies has already run, so subsequent reconciles can skip it.
+	skipNPCleanupAnnotation = "externalsecretsconfig.operator.openshift.io/skip-np-cleanup-check"
+
+	// proxyEgressPolicyName is the Kubernetes object name for the automatic proxy egress policy.
+	proxyEgressPolicyName = systemNetworkPolicyPrefix + "allow-proxy-egress"
 )
 
 var (
@@ -96,6 +169,14 @@ var (
 		"app.kubernetes.io/version":    os.Getenv(externalsecretsImageVersionEnvVarName),
 		"app.kubernetes.io/managed-by": common.ExternalSecretsOperatorCommonName,
 		"app.kubernetes.io/part-of":    common.ExternalSecretsOperatorCommonName,
+	}
+
+	// featureContainerArgs maps ExternalSecretsManager feature names to the container
+	// argument appended when that feature is enabled and the deployment declares support
+	// via updateOptionalFeatures. Only features listed in both ESM (enabled) and the
+	// deployment's supportedFeatures slice are applied.
+	featureContainerArgs = map[operatorv1alpha1.FeatureName]string{
+		operatorv1alpha1.UnsafeAllowGenericTargets: UnsafeAllowGenericTargetsArg,
 	}
 )
 
@@ -134,7 +215,7 @@ const (
 	allowWebhookTrafficAssetName                  = "external-secrets/networkpolicy_allow-api-server-and-webhook-traffic.yaml"
 	allowCertControllerTrafficAssetName           = "external-secrets/networkpolicy_allow-api-server-egress-for-cert-controller-traffic.yaml"
 	allowBitwardenServerTrafficAssetName          = "external-secrets/networkpolicy_allow-api-server-egress-for-bitwarden-sever.yaml"
-	allowDnsTrafficAsserName                      = "external-secrets/networkpolicy_allow-dns.yaml"
+	allowDNSTrafficAssetName                      = "external-secrets/networkpolicy_allow-dns.yaml"
 )
 
 var (

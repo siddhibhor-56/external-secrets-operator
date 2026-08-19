@@ -1,13 +1,17 @@
 package external_secrets
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	certmanagerapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager"
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	v1 "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 
@@ -18,6 +22,7 @@ import (
 
 var (
 	serviceExternalSecretWebhookName = "external-secrets-webhook"
+	errUnsupportedIssuerKind         = errors.New("unsupported issuer kind")
 )
 
 func (r *Reconciler) createOrApplyCertificates(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, recon bool) error {
@@ -33,8 +38,10 @@ func (r *Reconciler) createOrApplyCertificates(esc *operatorv1alpha1.ExternalSec
 			return r.assertSecretRefExists(esc, esc.Spec.Plugins.BitwardenSecretManagerProvider)
 		}
 		if !isCertManagerConfigEnabled(esc) {
-			return common.NewIrrecoverableError(fmt.Errorf("invalid bitwardenSecretManagerProvider config"),
-				"either secretRef or certManagerConfig must be configured, when bitwardenSecretManagerProvider is enabled")
+			return common.NewUserConfigurationError(
+				fmt.Errorf("invalid bitwardenSecretManagerProvider config"),
+				"either secretRef or certManagerConfig must be configured when bitwardenSecretManagerProvider is enabled",
+			)
 		}
 		if err := r.createOrApplyCertificate(esc, resourceMetadata, bitwardenCertificateAssetName, recon); err != nil {
 			return err
@@ -57,25 +64,25 @@ func (r *Reconciler) createOrApplyCertificate(esc *operatorv1alpha1.ExternalSecr
 		return common.FromClientError(err, "failed to check %s certificate resource already exists", certificateName)
 	}
 
-	if exist && recon {
+	if !exist {
+		return r.createWithFallback(desired, resourceMetadata, certificateName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s certificate resource already exists, maybe from previous installation", certificateName)
 	}
-	if exist && common.HasObjectChanged(desired, fetched, &resourceMetadata) {
-		r.log.V(1).Info("certificate has been modified, updating to desired state", "name", certificateName)
-		common.RemoveObsoleteAnnotations(desired, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to update %s certificate resource", certificateName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "certificate resource %s reconciled back to desired state", certificateName)
-	} else {
+
+	if !common.HasObjectChanged(desired, fetched, &resourceMetadata) {
 		r.log.V(4).Info("certificate resource already exists and is in expected state", "name", certificateName)
+		return nil
 	}
-	if !exist {
-		if err := r.Create(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to create %s certificate resource", certificateName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "certificate resource %s created", certificateName)
+
+	r.log.V(1).Info("certificate has been modified, updating to desired state", "name", certificateName)
+	common.RemoveObsoleteAnnotations(desired, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, desired); err != nil {
+		return common.FromClientError(err, "failed to update %s certificate resource", certificateName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "certificate resource %s reconciled back to desired state", certificateName)
 
 	return nil
 }
@@ -92,7 +99,7 @@ func (r *Reconciler) getCertificateObject(esc *operatorv1alpha1.ExternalSecretsC
 	common.ApplyResourceMetadata(certificate, resourceMetadata)
 
 	if err := r.updateCertificateParams(esc, certificate); err != nil {
-		return nil, common.NewIrrecoverableError(err, "failed to update certificate resource for %s/%s deployment", getNamespace(esc), esc.GetName())
+		return nil, err
 	}
 
 	return certificate, nil
@@ -104,10 +111,18 @@ func (r *Reconciler) updateCertificateParams(esc *operatorv1alpha1.ExternalSecre
 		certManageConfig = esc.Spec.ControllerConfig.CertProvider.CertManager
 	}
 	if certManageConfig.IssuerRef == nil {
-		return fmt.Errorf("cert-manager is enabled but issuerRef is not configured")
+		return common.NewUserConfigurationError(
+			fmt.Errorf("cert-manager is enabled but issuerRef is not configured"),
+			"cert-manager issuerRef must be configured in %s/%s",
+			getNamespace(esc), esc.GetName(),
+		)
 	}
 	if certManageConfig.IssuerRef.Name == "" {
-		return fmt.Errorf("cert-manager.issuerRef.name is not configured")
+		return common.NewUserConfigurationError(
+			fmt.Errorf("cert-manager.issuerRef.name is not configured"),
+			"cert-manager issuerRef.name must be set in %s/%s",
+			getNamespace(esc), esc.GetName(),
+		)
 	}
 	externalSecretsNamespace := getNamespace(esc)
 
@@ -145,9 +160,26 @@ func (r *Reconciler) updateCertificateParams(esc *operatorv1alpha1.ExternalSecre
 }
 
 func (r *Reconciler) assertIssuerRefExists(issueRef v1.ObjectReference, namespace string) error {
-	ifExists, err := r.getIssuer(issueRef, namespace)
-	if err != nil || !ifExists {
-		return common.FromClientError(err, "failed to fetch issuer")
+	issuerExists, err := r.getIssuer(issueRef, namespace)
+	if err != nil {
+		if errors.Is(err, errUnsupportedIssuerKind) {
+			return common.NewUserConfigurationError(
+				err,
+				"cert-manager issuerRef.kind %q is not supported in %s",
+				issueRef.Kind, namespace,
+			)
+		}
+		if clientErr := common.FromClientError(err, "failed to fetch issuer %q", issueRef.Name); clientErr != nil {
+			return clientErr
+		}
+		return common.NewRetryRequiredError(err, "failed to fetch issuer %q", issueRef.Name)
+	}
+	if !issuerExists {
+		return common.NewUserConfigurationError(
+			issuerNotFoundError(issueRef),
+			"issuer %q of kind %q not found in %s",
+			issueRef.Name, issueRef.Kind, namespace,
+		)
 	}
 	return nil
 }
@@ -160,13 +192,23 @@ func (r *Reconciler) assertSecretRefExists(esc *operatorv1alpha1.ExternalSecrets
 	object := &corev1.Secret{}
 
 	if err := r.UncachedClient.Get(r.ctx, namespacedName, object); err != nil {
-		return fmt.Errorf("failed to fetch %q secret: %w", namespacedName, err)
+		if apierrors.IsNotFound(err) {
+			return common.NewUserConfigurationError(
+				err,
+				"bitwarden TLS secret %q not found",
+				namespacedName,
+			)
+		}
+		if clientErr := common.FromClientError(err, "failed to fetch %q secret", namespacedName); clientErr != nil {
+			return clientErr
+		}
+		return common.NewRetryRequiredError(err, "failed to fetch %q secret", namespacedName)
 	}
 
 	return nil
 }
 
-func (r *Reconciler) getIssuer(issuerRef v1.ObjectReference, namespace string) (bool, error) {
+func (r *Reconciler) getIssuer(issuerRef v1.ObjectReference, namespace string) (issuerExists bool, err error) {
 	namespacedName := types.NamespacedName{
 		Name:      issuerRef.Name,
 		Namespace: namespace,
@@ -178,13 +220,30 @@ func (r *Reconciler) getIssuer(issuerRef v1.ObjectReference, namespace string) (
 		object = &certmanagerv1.ClusterIssuer{}
 	case issuerKind:
 		object = &certmanagerv1.Issuer{}
+	default:
+		return false, fmt.Errorf("%w: %q", errUnsupportedIssuerKind, issuerRef.Kind)
 	}
 
-	ifExists, err := r.UncachedClient.Exists(r.ctx, namespacedName, object)
+	issuerExists, err = r.UncachedClient.Exists(r.ctx, namespacedName, object)
 	if err != nil {
-		return ifExists, fmt.Errorf("failed to fetch %q issuer: %w", namespacedName, err)
+		return issuerExists, fmt.Errorf("failed to fetch %q issuer: %w", namespacedName, err)
 	}
-	return ifExists, nil
+	return issuerExists, nil
+}
+
+func issuerNotFoundError(issueRef v1.ObjectReference) error {
+	return apierrors.NewNotFound(issuerGroupResource(issueRef.Kind), issueRef.Name)
+}
+
+func issuerGroupResource(kind string) schema.GroupResource {
+	switch kind {
+	case clusterIssuerKind:
+		return schema.GroupResource{Group: certmanagerapi.GroupName, Resource: "clusterissuers"}
+	case issuerKind:
+		return schema.GroupResource{Group: certmanagerapi.GroupName, Resource: "issuers"}
+	default:
+		return schema.GroupResource{Resource: strings.ToLower(kind) + "s"}
+	}
 }
 
 func updateNamespaceForFQDN(fqdns []string, namespace string) []string {

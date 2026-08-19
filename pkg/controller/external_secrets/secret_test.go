@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -87,7 +89,7 @@ func TestCreateOrApplySecret(t *testing.T) {
 			wantErr: fmt.Sprintf("failed to check %s/%s secret resource already exists: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
 		},
 		{
-			name: "reconciliation of secret fails while restoring to expected state",
+			name: "reconciliation of secret fails while patching metadata to expected state",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
 				m.GetCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) error {
 					if o, ok := obj.(*corev1.Secret); ok {
@@ -104,14 +106,52 @@ func TestCreateOrApplySecret(t *testing.T) {
 					}
 					return true, nil
 				})
-				m.UpdateWithRetryCalls(func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 					if _, ok := obj.(*corev1.Secret); ok {
 						return commontest.ErrTestClient
 					}
 					return nil
 				})
 			},
-			wantErr: fmt.Sprintf("failed to update %s/%s secret resource: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
+			wantErr: fmt.Sprintf("failed to patch Secret %s/%s metadata: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
+		},
+		{
+			// Regression test: when the managed label is removed from the Secret, the object
+			// falls out of the label-filtered cache. cached Exists() returns false, Create()
+			// fails with AlreadyExists, and the controller must patch only the metadata,
+			// leaving cert-controller-injected TLS data untouched.
+			name: "Create returns AlreadyExists (label-filtered cache miss): patches metadata to restore labels",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, nil
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, testValidateSecretResourceName)
+				})
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*corev1.Secret); ok {
+						if obj.GetLabels()["app"] != "external-secrets" {
+							t.Errorf("expected app=external-secrets label in patch target, got %v", obj.GetLabels())
+						}
+					}
+					return nil
+				})
+			},
+		},
+		{
+			name: "Patch fails after AlreadyExists from Create",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					return false, nil
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, testValidateSecretResourceName)
+				})
+				m.PatchCalls(func(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					return commontest.ErrTestClient
+				})
+			},
+			wantErr: fmt.Sprintf("failed to patch Secret %s/%s metadata: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
 		},
 		{
 			name: "reconciliation of secret which already exists in expected state",
@@ -155,7 +195,7 @@ func TestCreateOrApplySecret(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: fmt.Sprintf("failed to create %s/%s secret resource: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
+			wantErr: fmt.Sprintf("failed to create Secret %s/%s: %s", commontest.TestExternalSecretsNamespace, testValidateSecretResourceName, commontest.ErrTestClient),
 		},
 		{
 			name: "successful secret creation",

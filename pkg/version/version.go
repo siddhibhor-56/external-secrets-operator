@@ -8,7 +8,7 @@ import (
 )
 
 // These variables are populated at build time via ldflags.
-// Example: go build -ldflags "-X github.com/openshift/external-secrets-operator/pkg/version.commitFromGit=$(git rev-parse HEAD)"
+// Example: go build -ldflags "-X github.com/openshift/external-secrets-operator/pkg/version.commitFromGit=$(git rev-parse HEAD)".
 var (
 	// commitFromGit is the source version that generated this build.
 	// Set via -ldflags during build.
@@ -27,7 +27,7 @@ var (
 	minorFromGit string
 
 	// buildDate is the build timestamp in ISO8601 format.
-	// Set via -ldflags during build using: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+	// Set via -ldflags during build using: $(date -u +'%Y-%m-%dT%H:%M:%SZ').
 	buildDate string
 )
 
@@ -44,7 +44,7 @@ func Get() version.Info {
 }
 
 // String returns a human-readable version string.
-// Format: "vX.Y.Z (commit: abc1234, built: 2024-01-01T00:00:00Z)"
+// Format: "vX.Y.Z (commit: abc1234, built: 2024-01-01T00:00:00Z)".
 func String() string {
 	v := Get()
 	commit := v.GitCommit

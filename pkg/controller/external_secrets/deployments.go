@@ -4,11 +4,17 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
 	"unsafe"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/apis/core"
 	corevalidation "k8s.io/kubernetes/pkg/apis/core/validation"
@@ -19,6 +25,10 @@ import (
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/operator/assets"
 )
+
+// operandArgsEnvSeparator splits OPERAND_*_ARGS on commas that introduce the next
+// --flag, so values may themselves contain commas (e.g. --tls-ciphers=A,B).
+var operandArgsEnvSeparator = regexp.MustCompile(`,+\s*--`)
 
 // createOrApplyDeployments ensures required Deployment resources exist and are correctly configured.
 func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, externalSecretsConfigCreateRecon bool) error {
@@ -65,9 +75,12 @@ func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecr
 func (r *Reconciler) createOrApplyDeploymentFromAsset(esc *operatorv1alpha1.ExternalSecretsConfig, assetName string, resourceMetadata common.ResourceMetadata,
 	externalSecretsConfigCreateRecon bool,
 ) error {
-	deployment, err := r.getDeploymentObject(assetName, esc, resourceMetadata)
-	if err != nil {
-		return err
+	deployment, trustedCAErr := r.getDeploymentObject(assetName, esc, resourceMetadata)
+	// trustedCABundle may fail in getDeploymentObject (e.g. missing ConfigMap) while still
+	// returning a deployment with the stale user-ca-bundle mount removed. Apply that spec
+	// first, then return the error so status becomes Degraded and the reconcile requeues.
+	if deployment == nil {
+		return trustedCAErr
 	}
 
 	deploymentName := fmt.Sprintf("%s/%s", deployment.GetNamespace(), deployment.GetName())
@@ -76,27 +89,31 @@ func (r *Reconciler) createOrApplyDeploymentFromAsset(esc *operatorv1alpha1.Exte
 	if err != nil {
 		return common.FromClientError(err, "failed to check %s deployment resource already exists", deploymentName)
 	}
-	if exist && externalSecretsConfigCreateRecon {
-		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s deployment resource already exists", deploymentName)
-	}
-	switch {
-	case exist && common.HasObjectChanged(deployment, fetched, &resourceMetadata):
-		r.log.V(1).Info("deployment has been modified, updating to desired state", "name", deploymentName)
-		common.RemoveObsoleteAnnotations(deployment, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, deployment); err != nil {
-			return common.FromClientError(err, "failed to update %s deployment resource", deploymentName)
+
+	if !exist {
+		if err := r.createWithFallback(deployment, resourceMetadata, deploymentName, esc); err != nil {
+			return err
 		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "deployment resource %s updated", deploymentName)
-	case !exist:
-		if err := r.Create(r.ctx, deployment); err != nil {
-			return common.FromClientError(err, "failed to create %s deployment resource", deploymentName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "deployment resource %s created", deploymentName)
-	default:
-		r.log.V(4).Info("deployment resource already exists and is in expected state", "name", deploymentName)
+		return trustedCAErr
 	}
 
-	return nil
+	if externalSecretsConfigCreateRecon {
+		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s deployment resource already exists", deploymentName)
+	}
+
+	if !common.HasObjectChanged(deployment, fetched, &resourceMetadata) {
+		r.log.V(4).Info("deployment resource already exists and is in expected state", "name", deploymentName)
+		return trustedCAErr
+	}
+
+	r.log.V(1).Info("deployment has been modified, updating to desired state", "name", deploymentName)
+	common.RemoveObsoleteAnnotations(deployment, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, deployment); err != nil {
+		return common.FromClientError(err, "failed to update %s deployment resource", deploymentName)
+	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "deployment resource %s updated", deploymentName)
+
+	return trustedCAErr
 }
 
 func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata) (*appsv1.Deployment, error) {
@@ -118,20 +135,41 @@ func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1
 
 	switch assetName {
 	case controllerDeploymentAssetName:
-		updateContainerSpec(deployment, esc, image, logLevel)
+		r.updateContainerSpec(deployment, esc, image, logLevel)
+		if err := applyOperandArgsFromEnv(deployment, OperandCoreControllerContainer, OperandExternalSecretsArgsEnvVar); err != nil {
+			return nil, fmt.Errorf("failed to apply operand args from env: %w", err)
+		}
+		if err := r.applyUserCABundleConfig(deployment, esc); err != nil {
+			wrapped := fmt.Errorf("failed to apply user CA bundle config: %w", err)
+			// When the referenced ConfigMap is missing, the deployment spec is updated to remove
+			// the user CA volume so the operand does not retain a stale mount reference.
+			if common.IsUserConfigurationNotFound(err) {
+				return deployment, wrapped
+			}
+			return nil, wrapped
+		}
 	case webhookDeploymentAssetName:
-		checkInterval := "5m"
+		checkInterval := normalizeDurationArg("5m")
 		if esc.Spec.ApplicationConfig.WebhookConfig != nil &&
 			esc.Spec.ApplicationConfig.WebhookConfig.CertificateCheckInterval != nil {
-			checkInterval = esc.Spec.ApplicationConfig.WebhookConfig.CertificateCheckInterval.Duration.String()
+			checkInterval = normalizeDurationArg(esc.Spec.ApplicationConfig.WebhookConfig.CertificateCheckInterval.Duration.String())
 		}
 		updateWebhookContainerSpec(deployment, image, logLevel, checkInterval)
+		if err := applyOperandArgsFromEnv(deployment, OperandWebhookContainer, OperandWebhookArgsEnvVar); err != nil {
+			return nil, fmt.Errorf("failed to apply operand args from env: %w", err)
+		}
 		updateWebhookVolumeConfig(deployment, esc)
 	case certControllerDeploymentAssetName:
 		updateCertControllerContainerSpec(deployment, image, logLevel)
+		if err := applyOperandArgsFromEnv(deployment, OperandCertControllerContainer, OperandCertControllerArgsEnvVar); err != nil {
+			return nil, fmt.Errorf("failed to apply operand args from env: %w", err)
+		}
 	case bitwardenDeploymentAssetName:
 		deployment.Labels["app.kubernetes.io/version"] = os.Getenv(bitwardenImageVersionEnvVarName)
 		updateBitwardenServerContainerSpec(deployment, bitwardenImage)
+		if err := applyOperandArgsFromEnv(deployment, OperandBitwardenContainer, OperandBitwardenSDKServerArgsEnvVar); err != nil {
+			return nil, fmt.Errorf("failed to apply operand args from env: %w", err)
+		}
 		updateBitwardenVolumeConfig(deployment, esc)
 	}
 
@@ -147,14 +185,22 @@ func (r *Reconciler) getDeploymentObject(assetName string, esc *operatorv1alpha1
 	if err := r.updateNodeSelector(deployment, esc); err != nil {
 		return nil, fmt.Errorf("failed to update node selector: %w", err)
 	}
-	if err := r.updateProxyConfiguration(deployment, esc); err != nil {
-		return nil, fmt.Errorf("failed to update proxy configuration: %w", err)
-	}
 	if err := r.applyUserDeploymentConfigs(deployment, esc, assetName); err != nil {
 		return nil, fmt.Errorf("failed to apply user deployment configuration: %w", err)
 	}
+	r.updateProxyConfiguration(deployment)
 
 	return deployment, nil
+}
+
+// normalizeDurationArg parses a duration string and returns its canonical Go form
+// (e.g. "5m" → "5m0s") so container args match values persisted by the API server.
+func normalizeDurationArg(raw string) string {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return raw
+	}
+	return d.String()
 }
 
 // updatePodTemplateLabels sets labels on the pod template spec.
@@ -317,7 +363,7 @@ func validateAffinityRules(affinity *corev1.Affinity, fldPath *field.Path) error
 func validateTolerationsConfig(tolerations []corev1.Toleration, fldPath *field.Path) error {
 	// convert corev1.Tolerations to core.Tolerations, required for validation.
 	convTolerations := *(*[]core.Toleration)(unsafe.Pointer(&tolerations))
-	return corevalidation.ValidateTolerations(convTolerations, fldPath.Child("tolerations")).ToAggregate()
+	return corevalidation.ValidateTolerations(convTolerations, fldPath.Child("tolerations"), corevalidation.PodValidationOptions{}).ToAggregate()
 }
 
 func (r *Reconciler) updateImageInStatus(esc *operatorv1alpha1.ExternalSecretsConfig) error {
@@ -332,7 +378,7 @@ func (r *Reconciler) updateImageInStatus(esc *operatorv1alpha1.ExternalSecretsCo
 }
 
 // argument list for external-secrets deployment resource.
-func updateContainerSpec(deployment *appsv1.Deployment, esc *operatorv1alpha1.ExternalSecretsConfig, image, logLevel string) {
+func (r *Reconciler) updateContainerSpec(deployment *appsv1.Deployment, esc *operatorv1alpha1.ExternalSecretsConfig, image, logLevel string) {
 	var (
 		enableClusterStoreArgFmt           = "--enable-cluster-store-reconciler=%s"
 		enableClusterExternalSecretsArgFmt = "--enable-cluster-external-secret-reconciler=%s"
@@ -360,8 +406,10 @@ func updateContainerSpec(deployment *appsv1.Deployment, esc *operatorv1alpha1.Ex
 			fmt.Sprintf(enableClusterExternalSecretsArgFmt, "true"))
 	}
 
+	r.updateOptionalFeatures(&args, []operatorv1alpha1.FeatureName{operatorv1alpha1.UnsafeAllowGenericTargets})
+
 	for i, container := range deployment.Spec.Template.Spec.Containers {
-		if container.Name == "external-secrets" {
+		if container.Name == OperandCoreControllerContainer {
 			deployment.Spec.Template.Spec.Containers[i].Args = args
 			deployment.Spec.Template.Spec.Containers[i].Image = image
 			updateContainerSecurityContext(&deployment.Spec.Template.Spec.Containers[i])
@@ -468,219 +516,427 @@ func updateSecretVolumeConfig(deployment *appsv1.Deployment, volumeName, secretN
 	})
 }
 
-// updateProxyConfiguration applies all proxy-related configuration to the deployment.
-func (r *Reconciler) updateProxyConfiguration(deployment *appsv1.Deployment, esc *operatorv1alpha1.ExternalSecretsConfig) error {
-	proxyConfig := r.getProxyConfiguration(esc)
-
-	r.updateProxyEnvironmentVariables(deployment, proxyConfig)
-	if err := r.updateTrustedCABundleVolumes(deployment, proxyConfig); err != nil {
-		return fmt.Errorf("failed to update trusted CA bundle volumes: %w", err)
+// updateProxyConfiguration applies or removes all proxy-related deployment configuration
+// (environment variables and trusted CA bundle volume/mounts) based on proxy configuration.
+func (r *Reconciler) updateProxyConfiguration(deployment *appsv1.Deployment) {
+	if !r.isProxyEnabled() {
+		removeProxyEnvironmentVariables(deployment)
+		removeTrustedCABundleVolumes(deployment)
+		return
 	}
 
-	return nil
+	applyProxyEnvironmentVariables(deployment, r.proxyConfig)
+	applyTrustedCABundleVolumes(deployment)
 }
 
-// updateProxyEnvironmentVariables sets or removes proxy environment variables on all containers and init containers in the deployment.
-func (r *Reconciler) updateProxyEnvironmentVariables(deployment *appsv1.Deployment, proxyConfig *operatorv1alpha1.ProxyConfig) {
-	// Apply proxy environment variables to all containers
+// applyProxyEnvironmentVariables sets proxy environment variables on all containers and init containers.
+func applyProxyEnvironmentVariables(deployment *appsv1.Deployment, proxyConfig *operatorv1alpha1.ProxyConfig) {
 	for i := range deployment.Spec.Template.Spec.Containers {
-		container := &deployment.Spec.Template.Spec.Containers[i]
-		if proxyConfig != nil {
-			r.setProxyEnvVars(container, proxyConfig)
-		} else {
-			r.removeProxyEnvVars(container)
-		}
+		setProxyEnvVars(&deployment.Spec.Template.Spec.Containers[i], proxyConfig)
 	}
-
-	// Apply proxy environment variables to all init containers
 	for i := range deployment.Spec.Template.Spec.InitContainers {
-		initContainer := &deployment.Spec.Template.Spec.InitContainers[i]
-		if proxyConfig != nil {
-			r.setProxyEnvVars(initContainer, proxyConfig)
-		} else {
-			r.removeProxyEnvVars(initContainer)
-		}
+		setProxyEnvVars(&deployment.Spec.Template.Spec.InitContainers[i], proxyConfig)
 	}
 }
 
-// setProxyEnvVars sets proxy environment variables on a container.
-func (r *Reconciler) setProxyEnvVars(container *corev1.Container, proxyConfig *operatorv1alpha1.ProxyConfig) {
-	if proxyConfig == nil {
-		return
+// removeProxyEnvironmentVariables removes proxy environment variables from all containers and init containers.
+func removeProxyEnvironmentVariables(deployment *appsv1.Deployment) {
+	for i := range deployment.Spec.Template.Spec.Containers {
+		removeProxyEnvVars(&deployment.Spec.Template.Spec.Containers[i])
 	}
-	if container.Env == nil {
-		container.Env = []corev1.EnvVar{}
+	for i := range deployment.Spec.Template.Spec.InitContainers {
+		removeProxyEnvVars(&deployment.Spec.Template.Spec.InitContainers[i])
 	}
-
-	setEnvVar := func(name, value string) {
-		if value == "" {
-			return
-		}
-
-		// Check if the environment variable already exists
-		for i, env := range container.Env {
-			if env.Name == name {
-				container.Env[i].Value = value
-				return
-			}
-		}
-
-		// Add new environment variable if it doesn't exist
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  name,
-			Value: value,
-		})
-	}
-
-	// Set proxy environment variables
-	setEnvVar(httpProxyEnvVar, proxyConfig.HTTPProxy)
-	setEnvVar(httpsProxyEnvVar, proxyConfig.HTTPSProxy)
-	setEnvVar(noProxyEnvVar, proxyConfig.NoProxy)
-
-	setEnvVar(httpProxyEnvVarLowercase, proxyConfig.HTTPProxy)
-	setEnvVar(httpsProxyEnvVarLowercase, proxyConfig.HTTPSProxy)
-	setEnvVar(noProxyEnvVarLowercase, proxyConfig.NoProxy)
 }
 
-// removeProxyEnvVars removes proxy environment variables from a container.
-func (r *Reconciler) removeProxyEnvVars(container *corev1.Container) {
-	if len(container.Env) == 0 {
+// mergeContainerEnvVars updates, adds, or removes environment variables in the target container
+// based on the provided map. Managed keys from envVars are applied in sorted name order so
+// container.Env stays stable across reconciles. Keys with empty string values are omitted.
+// Unmanaged environment variables from the container are appended after managed keys.
+func mergeContainerEnvVars(container *corev1.Container, envVars map[string]string) {
+	if envVars == nil {
 		return
 	}
 
-	// Helper function to check if an env var name is a proxy variable
-	isProxyEnvVar := func(name string) bool {
-		switch name {
-		case httpProxyEnvVar, httpsProxyEnvVar, noProxyEnvVar,
-			httpProxyEnvVarLowercase, httpsProxyEnvVarLowercase, noProxyEnvVarLowercase:
-			return true
-		default:
-			return false
+	newEnv := make([]corev1.EnvVar, 0, len(container.Env)+len(envVars))
+
+	names := make([]string, 0, len(envVars))
+	for name := range envVars {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		if value := envVars[name]; value != "" {
+			newEnv = append(newEnv, corev1.EnvVar{
+				Name:  name,
+				Value: value,
+			})
 		}
 	}
 
-	// Filter out proxy environment variables
+	for _, env := range container.Env {
+		if _, exists := envVars[env.Name]; !exists {
+			newEnv = append(newEnv, env)
+		}
+	}
+
+	container.Env = newEnv
+}
+
+// pruneContainerEnvVars filters out specified environment variables from the target container.
+// It removes any variable whose name matches an entry in the target slice, effectively
+// cleaning up configurations that are no longer required by the controller lifecycle.
+// Variables not present in the target slice remain entirely unaffected.
+func pruneContainerEnvVars(container *corev1.Container, envVars []string) {
+	if len(container.Env) == 0 || len(envVars) == 0 {
+		return
+	}
+
 	filteredEnv := make([]corev1.EnvVar, 0, len(container.Env))
 	for _, env := range container.Env {
-		if !isProxyEnvVar(env.Name) {
-			filteredEnv = append(filteredEnv, env)
+		if slices.Contains(envVars, env.Name) {
+			continue
 		}
+		filteredEnv = append(filteredEnv, env)
 	}
+
 	container.Env = filteredEnv
 }
 
-// updateTrustedCABundleVolumes adds or removes trusted CA bundle volume and volume mounts to/from the deployment
-// based on proxy configuration presence.
-func (r *Reconciler) updateTrustedCABundleVolumes(deployment *appsv1.Deployment, proxyConfig *operatorv1alpha1.ProxyConfig) error {
-	if proxyConfig != nil {
-		// Add trusted CA bundle volume and volume mounts
-		return r.addTrustedCABundleVolumes(deployment)
-	} else {
-		// Remove trusted CA bundle volume and volume mounts
-		return r.removeTrustedCABundleVolumes(deployment)
+// setProxyEnvVars sets proxy environment variables on a container.
+func setProxyEnvVars(container *corev1.Container, proxyConfig *operatorv1alpha1.ProxyConfig) {
+	if proxyConfig == nil {
+		return
 	}
+
+	envVars := map[string]string{
+		httpProxyEnvVar:           proxyConfig.HTTPProxy,
+		httpsProxyEnvVar:          proxyConfig.HTTPSProxy,
+		noProxyEnvVar:             proxyConfig.NoProxy,
+		httpProxyEnvVarLowercase:  proxyConfig.HTTPProxy,
+		httpsProxyEnvVarLowercase: proxyConfig.HTTPSProxy,
+		noProxyEnvVarLowercase:    proxyConfig.NoProxy,
+	}
+
+	mergeContainerEnvVars(container, envVars)
 }
 
-// addTrustedCABundleVolumes adds trusted CA bundle volume and volume mounts to the deployment.
-func (r *Reconciler) addTrustedCABundleVolumes(deployment *appsv1.Deployment) error {
-	// Add the trusted CA bundle volume to the pod spec
-	trustedCAVolume := corev1.Volume{
-		Name: trustedCABundleVolumeName,
+// removeProxyEnvVars removes proxy environment variables from a container.
+func removeProxyEnvVars(container *corev1.Container) {
+	proxyEnvVars := []string{httpProxyEnvVar, httpsProxyEnvVar, noProxyEnvVar,
+		httpProxyEnvVarLowercase, httpsProxyEnvVarLowercase, noProxyEnvVarLowercase}
+	pruneContainerEnvVars(container, proxyEnvVars)
+}
+
+func updateVolumeMount(container *corev1.Container, volumeName, volumeMountPath string) {
+	mount := corev1.VolumeMount{
+		Name:      volumeName,
+		MountPath: volumeMountPath,
+		ReadOnly:  true,
+	}
+
+	for i, existing := range container.VolumeMounts {
+		if existing.Name == volumeName {
+			container.VolumeMounts[i] = mount
+			return
+		}
+	}
+	container.VolumeMounts = append(container.VolumeMounts, mount)
+}
+
+// upsertConfigMapVolume adds or updates a ConfigMap volume on the deployment pod spec.
+func upsertConfigMapVolume(deployment *appsv1.Deployment, configMapName, configMapKeyName, volumeName, volumeKeyPath string) {
+	volume := corev1.Volume{
+		Name: volumeName,
 		VolumeSource: corev1.VolumeSource{
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{
-					Name: trustedCABundleConfigMapName,
+					Name: configMapName,
 				},
+				DefaultMode: ptr.To(int32(420)),
 			},
 		},
 	}
 
-	// Check if the volume already exists, if not add it
-	volumeExists := false
-	for i, volume := range deployment.Spec.Template.Spec.Volumes {
-		if volume.Name == trustedCABundleVolumeName {
-			deployment.Spec.Template.Spec.Volumes[i] = trustedCAVolume
-			volumeExists = true
-			break
+	if configMapKeyName != "" && volumeKeyPath != "" {
+		volume.ConfigMap.Items = append(volume.VolumeSource.ConfigMap.Items, corev1.KeyToPath{
+			Key:  configMapKeyName,
+			Path: volumeKeyPath,
+		})
+	}
+
+	for i, vol := range deployment.Spec.Template.Spec.Volumes {
+		if vol.Name == volumeName {
+			deployment.Spec.Template.Spec.Volumes[i] = volume
+			return
 		}
 	}
-	if !volumeExists {
-		deployment.Spec.Template.Spec.Volumes = append(deployment.Spec.Template.Spec.Volumes, trustedCAVolume)
-	}
-
-	// Add volume mounts to all containers and init containers
-	trustedCAVolumeMount := corev1.VolumeMount{
-		Name:      trustedCABundleVolumeName,
-		MountPath: trustedCABundleMountPath,
-		ReadOnly:  true,
-	}
-
-	// Add volume mount to all containers
-	for i := range deployment.Spec.Template.Spec.Containers {
-		container := &deployment.Spec.Template.Spec.Containers[i]
-		r.addTrustedCAVolumeMount(container, trustedCAVolumeMount)
-	}
-
-	// Add volume mount to all init containers
-	for i := range deployment.Spec.Template.Spec.InitContainers {
-		initContainer := &deployment.Spec.Template.Spec.InitContainers[i]
-		r.addTrustedCAVolumeMount(initContainer, trustedCAVolumeMount)
-	}
-
-	return nil
+	deployment.Spec.Template.Spec.Volumes = append(deployment.Spec.Template.Spec.Volumes, volume)
 }
 
-// removeTrustedCABundleVolumes removes trusted CA bundle volume and volume mounts from the deployment.
-func (r *Reconciler) removeTrustedCABundleVolumes(deployment *appsv1.Deployment) error {
-	// Remove the trusted CA bundle volume from the pod spec
-	var filteredVolumes []corev1.Volume
-	for _, volume := range deployment.Spec.Template.Spec.Volumes {
-		if volume.Name != trustedCABundleVolumeName {
-			filteredVolumes = append(filteredVolumes, volume)
-		}
-	}
-	deployment.Spec.Template.Spec.Volumes = filteredVolumes
-
-	// Remove volume mounts from all containers
-	for i := range deployment.Spec.Template.Spec.Containers {
-		container := &deployment.Spec.Template.Spec.Containers[i]
-		r.removeTrustedCAVolumeMount(container)
-	}
-
-	// Remove volume mounts from all init containers
-	for i := range deployment.Spec.Template.Spec.InitContainers {
-		initContainer := &deployment.Spec.Template.Spec.InitContainers[i]
-		r.removeTrustedCAVolumeMount(initContainer)
-	}
-
-	return nil
-}
-
-// addTrustedCAVolumeMount adds the trusted CA bundle volume mount to a container if it doesn't already exist.
-func (r *Reconciler) addTrustedCAVolumeMount(container *corev1.Container, trustedCAVolumeMount corev1.VolumeMount) {
-	// Check if the volume mount already exists, if not add it
-	volumeMountExists := false
-	for j, volumeMount := range container.VolumeMounts {
-		if volumeMount.Name == trustedCABundleVolumeName {
-			container.VolumeMounts[j] = trustedCAVolumeMount
-			volumeMountExists = true
-			break
-		}
-	}
-	if !volumeMountExists {
-		container.VolumeMounts = append(container.VolumeMounts, trustedCAVolumeMount)
-	}
-}
-
-// removeTrustedCAVolumeMount removes the trusted CA bundle volume mount from a container.
-func (r *Reconciler) removeTrustedCAVolumeMount(container *corev1.Container) {
+func pruneVolumeMount(container *corev1.Container, volumeName string) {
 	var filteredVolumeMounts []corev1.VolumeMount
 	for _, volumeMount := range container.VolumeMounts {
-		if volumeMount.Name != trustedCABundleVolumeName {
+		if volumeMount.Name != volumeName {
 			filteredVolumeMounts = append(filteredVolumeMounts, volumeMount)
 		}
 	}
 	container.VolumeMounts = filteredVolumeMounts
+}
+
+// prunePodVolume removes a volume from the deployment pod spec.
+func prunePodVolume(deployment *appsv1.Deployment, volumeName string) {
+	var filteredVolumes []corev1.Volume
+	for _, volume := range deployment.Spec.Template.Spec.Volumes {
+		if volume.Name != volumeName {
+			filteredVolumes = append(filteredVolumes, volume)
+		}
+	}
+	deployment.Spec.Template.Spec.Volumes = filteredVolumes
+}
+
+// applyTrustedCABundleVolumes adds the operator-managed trusted CA bundle volume and mounts it on all containers and init containers.
+func applyTrustedCABundleVolumes(deployment *appsv1.Deployment) {
+	upsertConfigMapVolume(deployment, ProxyTrustedCABundleConfigMapName, "", ProxyTrustedCABundleVolumeName, "")
+	for i := range deployment.Spec.Template.Spec.Containers {
+		updateVolumeMount(&deployment.Spec.Template.Spec.Containers[i], ProxyTrustedCABundleVolumeName, ProxyTrustedCABundleMountPath)
+	}
+	for i := range deployment.Spec.Template.Spec.InitContainers {
+		updateVolumeMount(&deployment.Spec.Template.Spec.InitContainers[i], ProxyTrustedCABundleVolumeName, ProxyTrustedCABundleMountPath)
+	}
+}
+
+// removeTrustedCABundleVolumes removes the operator-managed trusted CA bundle volume and mounts from all containers and init containers.
+func removeTrustedCABundleVolumes(deployment *appsv1.Deployment) {
+	prunePodVolume(deployment, ProxyTrustedCABundleVolumeName)
+	for i := range deployment.Spec.Template.Spec.Containers {
+		pruneVolumeMount(&deployment.Spec.Template.Spec.Containers[i], ProxyTrustedCABundleVolumeName)
+	}
+	for i := range deployment.Spec.Template.Spec.InitContainers {
+		pruneVolumeMount(&deployment.Spec.Template.Spec.InitContainers[i], ProxyTrustedCABundleVolumeName)
+	}
+}
+
+// applyUserCABundleConfig validates the user-specified trustedCABundle ConfigMap and, when valid,
+// mounts it into the controller deployment and sets SSL_CERT_DIR on the core controller container.
+// Skip and error conditions:
+//   - trustedCABundle is nil → remove any existing user CA bundle config, no-op
+//   - CM NotFound → remove user CA config from deployment, TrustedCABundleError (Degraded + requeue)
+//   - CM key missing or invalid PEM → fail closed (keep existing mount), TrustedCABundleError
+//     (Degraded; recovery via ConfigMap watch)
+//   - CM has TrustedCABundleInjectLabel AND proxy is configured → skip user mount; CNO reconciles
+//     this ConfigMap and the proxy trusted CA bundle is already mounted at /etc/pki/tls/certs
+func (r *Reconciler) applyUserCABundleConfig(deployment *appsv1.Deployment, esc *operatorv1alpha1.ExternalSecretsConfig) error {
+	ref := esc.Spec.ControllerConfig.TrustedCABundle
+	if ref == nil {
+		r.removeUserCABundleConfig(deployment)
+		r.now.Reset()
+		return nil
+	}
+
+	namespacedName := types.NamespacedName{Name: ref.Name, Namespace: getNamespace(esc)}
+	cm := &corev1.ConfigMap{}
+	if err := r.getWithCacheFallback(namespacedName, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.removeUserCABundleConfig(deployment)
+			return common.NewUserConfigurationError(err, "trustedCABundle ConfigMap %q not found", namespacedName)
+		}
+		return common.FromClientError(err, "failed to fetch trustedCABundle ConfigMap %q", namespacedName)
+	}
+
+	// Label before validation so administrators can recover from invalid PEM via resource watch.
+	if err := r.updateWatchLabel(namespacedName, &corev1.ConfigMap{}); err != nil {
+		return common.FromClientError(err, "failed to patch watch label on trustedCABundle ConfigMap %q", namespacedName)
+	}
+
+	// Skip mounting when the CM is CNO-managed (inject-trusted-cabundle label) and proxy is
+	// configured in cluster: the operator-managed ConfigMap already receives the same cluster CAs from CNO
+	// and is mounted at /etc/pki/tls/certs by the existing proxy CA bundle mechanism.
+	if cm.Labels[TrustedCABundleInjectLabel] == "true" && r.isProxyEnabled() {
+		r.log.V(1).Info("trustedCABundle ConfigMap is CNO-managed and proxy is configured, skipping user CA bundle mount", "name", namespacedName)
+		r.removeUserCABundleConfig(deployment)
+		r.eventRecorder.Eventf(
+			esc,
+			corev1.EventTypeNormal,
+			trustedCABundleEventSkippedCNOProxy,
+			"trustedCABundle ConfigMap %q is CNO-managed and proxy is configured; user CA mount skipped because cluster trusted CA bundle is already mounted for proxy",
+			namespacedName,
+		)
+		return nil
+	}
+
+	key := ref.Key
+	if key == "" {
+		key = UserCABundleKeyPath
+	}
+	data, ok := cm.Data[key]
+	if !ok {
+		return common.NewUserConfigurationError(
+			fmt.Errorf("key %q not found", key),
+			"trustedCABundle ConfigMap %q does not contain key %q",
+			namespacedName, key,
+		)
+	}
+
+	if err := r.validateTrustedCABundleData(esc, namespacedName, key, data); err != nil {
+		return common.NewUserConfigurationError(err, "trustedCABundle ConfigMap %q key %q has invalid PEM", namespacedName, key)
+	}
+
+	// Add or replace the user CA bundle volume and mount it on the core controller container only.
+	upsertConfigMapVolume(deployment, ref.Name, key, UserCABundleVolumeName, UserCABundleKeyPath)
+	for i := range deployment.Spec.Template.Spec.Containers {
+		container := &deployment.Spec.Template.Spec.Containers[i]
+		if container.Name == OperandCoreControllerContainer {
+			updateVolumeMount(container, UserCABundleVolumeName, UserCABundleMountPath)
+			mergeContainerEnvVars(container, map[string]string{SSLCertDirEnvVar: SSLCertDirValue})
+			break
+		}
+	}
+	return nil
+}
+
+// removeUserCABundleConfig removes the user CA bundle volume, volume mount, and SSL_CERT_DIR
+// env var from the controller deployment when trustedCABundle is no longer configured or valid.
+func (r *Reconciler) removeUserCABundleConfig(deployment *appsv1.Deployment) {
+	prunePodVolume(deployment, UserCABundleVolumeName)
+	for i := range deployment.Spec.Template.Spec.Containers {
+		container := &deployment.Spec.Template.Spec.Containers[i]
+		if container.Name == OperandCoreControllerContainer {
+			pruneVolumeMount(container, UserCABundleVolumeName)
+			pruneContainerEnvVars(container, []string{SSLCertDirEnvVar})
+			break
+		}
+	}
+}
+
+// argFlagKey returns the flag key for a container arg (everything before the first '='),
+// or the whole token when there is no '='. Positional args without a leading "--" return "".
+func argFlagKey(arg string) string {
+	if !strings.HasPrefix(arg, "--") {
+		return ""
+	}
+	if i := strings.IndexByte(arg, '='); i >= 0 {
+		return arg[:i]
+	}
+	return arg
+}
+
+// parseOperandArgsEnv parses a list of full CLI flags separated by a comma that
+// introduces the next --flag (e.g. "--concurrent=5,--loglevel=debug").
+// Commas inside --key=value values are preserved (e.g. "--tls-ciphers=A,B,--loglevel=debug").
+// Boolean-style flags (--key with no '=') cannot carry a value, so any ",..." after
+// the flag name is dropped (e.g. "--enable-foo,junk,--bar=1" → "--enable-foo","--bar=1").
+// Whitespace around separators, repeated commas between flags, and a trailing
+// comma are tolerated. Callers should treat a fully empty/whitespace env value
+// as a no-op before calling this helper.
+func parseOperandArgsEnv(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}, nil
+	}
+
+	// Delimiter consumes the next flag's leading "--", so re-prefix on later parts.
+	parts := operandArgsEnvSeparator.Split(raw, -1)
+	args := make([]string, 0, len(parts))
+	for i, part := range parts {
+		if i > 0 {
+			part = "--" + part
+		}
+		// Trim surrounding whitespace, strip trailing separator commas, then
+		// trim again so a comma preceded by spaces (e.g. "--foo=1 ,") is removed.
+		part = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(part), ","))
+		if part == "" {
+			continue
+		}
+		if !strings.HasPrefix(part, "--") || part == "--" {
+			return nil, common.NewUserConfigurationError(
+				fmt.Errorf("argument %q must start with --", part),
+				"invalid custom arg override",
+			)
+		}
+		// Boolean-style flags have no value; discard ",junk" after the flag name.
+		if !strings.Contains(part, "=") {
+			if j := strings.IndexByte(part, ','); j >= 0 {
+				part = strings.TrimSpace(part[:j])
+				if part == "--" {
+					return nil, common.NewUserConfigurationError(
+						fmt.Errorf("argument %q must start with --", part),
+						"invalid custom arg override",
+					)
+				}
+			}
+		}
+		// Reject empty flag names such as "--=value" (argFlagKey is "--").
+		if argFlagKey(part) == "--" {
+			return nil, common.NewUserConfigurationError(
+				fmt.Errorf("argument %q must include a flag name after --", part),
+				"invalid custom arg override",
+			)
+		}
+		args = append(args, part)
+	}
+	return args, nil
+}
+
+// mergeContainerArgs overrides matching --flag keys in base with overrides and appends
+// unknown keys. Positional args (no leading "--") in base are preserved in place;
+// non-flag overrides are skipped (parseOperandArgsEnv already rejects them for the env path).
+func mergeContainerArgs(base []string, overrides []string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+
+	keyIndex := make(map[string]int, len(base))
+	for i, arg := range base {
+		if key := argFlagKey(arg); key != "" {
+			keyIndex[key] = i
+		}
+	}
+
+	result := slices.Clone(base)
+	for _, override := range overrides {
+		key := argFlagKey(override)
+		if key == "" {
+			continue
+		}
+		if idx, ok := keyIndex[key]; ok {
+			result[idx] = override
+			continue
+		}
+		result = append(result, override)
+		keyIndex[key] = len(result) - 1
+	}
+	return result
+}
+
+// applyOperandArgsFromEnv reads envVarName and merges its --key[=value] flags into
+// the named container's Args. Flags are separated by a comma before the next --flag
+// so values may contain commas. Unset or empty env is a no-op.
+//
+// TODO: Remove in v1.4.0. Backported to 1.1/1.2 as a temporary escape hatch;
+// v1.3.0 adds ExternalSecretsConfig advancedOverrides for per-component Deployment
+// overrides and is the migration window before this env-based path is removed.
+func applyOperandArgsFromEnv(deployment *appsv1.Deployment, containerName, envVarName string) error {
+	raw := strings.TrimSpace(os.Getenv(envVarName))
+	if raw == "" {
+		return nil
+	}
+
+	overrides, err := parseOperandArgsEnv(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", envVarName, err)
+	}
+
+	for i := range deployment.Spec.Template.Spec.Containers {
+		if deployment.Spec.Template.Spec.Containers[i].Name != containerName {
+			continue
+		}
+		deployment.Spec.Template.Spec.Containers[i].Args = mergeContainerArgs(
+			deployment.Spec.Template.Spec.Containers[i].Args, overrides)
+		return nil
+	}
+	return fmt.Errorf("container %s not found in deployment %s", containerName, deployment.GetName())
 }
 
 // applyUserDeploymentConfigs updates the deployment resource spec with user specified configurations.
@@ -701,7 +957,7 @@ func (r *Reconciler) applyUserDeploymentConfigs(deployment *appsv1.Deployment, e
 			if len(i.OverrideEnv) > 0 {
 				for j := range deployment.Spec.Template.Spec.Containers {
 					if deployment.Spec.Template.Spec.Containers[j].Name == containerName {
-						mergeEnvVars(&deployment.Spec.Template.Spec.Containers[j], i.OverrideEnv)
+						mergeUserEnvVars(&deployment.Spec.Template.Spec.Containers[j], i.OverrideEnv)
 						break
 					}
 				}
@@ -713,8 +969,9 @@ func (r *Reconciler) applyUserDeploymentConfigs(deployment *appsv1.Deployment, e
 	return nil
 }
 
-// mergeEnvVars merges user-defined environment variables into a container, User-defined values take precedence over existing values.
-func mergeEnvVars(container *corev1.Container, overrideEnv []corev1.EnvVar) {
+// mergeUserEnvVars merges user-defined environment variables into a container.
+// User-defined values take precedence over existing values.
+func mergeUserEnvVars(container *corev1.Container, overrideEnv []corev1.EnvVar) {
 	if container.Env == nil {
 		container.Env = []corev1.EnvVar{}
 	}
@@ -738,14 +995,32 @@ func mergeEnvVars(container *corev1.Container, overrideEnv []corev1.EnvVar) {
 func getComponentNameFromAsset(assetName string) (operatorv1alpha1.ComponentName, string, error) {
 	switch assetName {
 	case controllerDeploymentAssetName:
-		return operatorv1alpha1.CoreController, controllerContainerName, nil
+		return operatorv1alpha1.CoreController, OperandCoreControllerContainer, nil
 	case webhookDeploymentAssetName:
-		return operatorv1alpha1.Webhook, webhookContainerName, nil
+		return operatorv1alpha1.Webhook, OperandWebhookContainer, nil
 	case certControllerDeploymentAssetName:
-		return operatorv1alpha1.CertController, certControllerContainerName, nil
+		return operatorv1alpha1.CertController, OperandCertControllerContainer, nil
 	case bitwardenDeploymentAssetName:
-		return operatorv1alpha1.BitwardenSDKServer, bitwardenContainerName, nil
+		return operatorv1alpha1.BitwardenSDKServer, OperandBitwardenContainer, nil
 	default:
 		return "", "", fmt.Errorf("unknown deployment asset name: %s", assetName)
+	}
+}
+
+// updateOptionalFeatures appends container args for enabled ESM features that are
+// supported by the target deployment. supportedFeatures declares which features
+// this deployment accepts; features enabled in ESM but not listed here are ignored.
+func (r *Reconciler) updateOptionalFeatures(containerArgs *[]string, supportedFeatures []operatorv1alpha1.FeatureName) {
+	for _, featureName := range supportedFeatures {
+		if !common.IsFeatureEnabled(r.esm, featureName) {
+			r.log.V(4).Info("feature not active", "feature", featureName)
+			continue
+		}
+		arg, ok := featureContainerArgs[featureName]
+		if !ok {
+			r.log.V(2).Info("feature enabled but no arg mapping for deployment", "feature", featureName)
+			continue
+		}
+		*containerArgs = append(*containerArgs, arg)
 	}
 }

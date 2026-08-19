@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/client/fakes"
+	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/controller/commontest"
 )
 
@@ -29,11 +31,15 @@ const (
 
 func TestCreateOrApplyCertificates(t *testing.T) {
 	tests := []struct {
-		name    string
-		preReq  func(*Reconciler, *fakes.FakeCtrlClient)
-		esc     func(*v1alpha1.ExternalSecretsConfig)
-		recon   bool
-		wantErr string
+		name                   string
+		preReq                 func(*Reconciler, *fakes.FakeCtrlClient)
+		esc                    func(*v1alpha1.ExternalSecretsConfig)
+		recon                  bool
+		wantErr                string
+		wantUserConfigErr      bool
+		wantUserConfigNotFound bool
+		wantIrrecoverableErr   bool
+		wantRetryRequiredErr   bool
 	}{
 		{
 			name:   "external secret spec disabled",
@@ -89,8 +95,38 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = ""
 				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Kind = issuerKind
 			},
-			recon:   false,
-			wantErr: fmt.Sprintf("failed to update certificate resource for %s/%s deployment: cert-manager.issuerRef.name is not configured", commontest.TestExternalSecretsNamespace, testExternalSecretsConfigForCertificate().GetName()),
+			recon:             false,
+			wantUserConfigErr: true,
+		},
+		{
+			name: "bitwarden enabled without secretRef or cert-manager returns user configuration error",
+			esc: func(esc *v1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ControllerConfig.CertProvider = nil
+				esc.Spec.Plugins.BitwardenSecretManagerProvider = &v1alpha1.BitwardenSecretManagerProvider{
+					Mode: v1alpha1.Enabled,
+				}
+			},
+			recon:             false,
+			wantUserConfigErr: true,
+		},
+		{
+			name: "cert manager config enabled but issuer does not exist",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					if ns.Name == testIssuerName {
+						return false, nil
+					}
+					return false, nil
+				})
+			},
+			esc: func(esc *v1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ControllerConfig.CertProvider.CertManager.Mode = v1alpha1.Enabled
+				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
+				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Kind = issuerKind
+			},
+			recon:                  false,
+			wantUserConfigErr:      true,
+			wantUserConfigNotFound: true,
 		},
 		{
 			name: "reconciliation of webhook certificate fails while checking if exists",
@@ -268,7 +304,7 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
 			},
 			recon:   false,
-			wantErr: fmt.Sprintf("failed to create %s/%s certificate resource: %s", commontest.TestExternalSecretsNamespace, testValidateCertificateResourceName, commontest.ErrTestClient),
+			wantErr: fmt.Sprintf("failed to create Certificate %s/%s: %s", commontest.TestExternalSecretsNamespace, testValidateCertificateResourceName, commontest.ErrTestClient),
 		},
 		{
 			name: "successful webhook certificate creation",
@@ -302,6 +338,27 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
 			},
 			recon: false,
+		},
+		{
+			name: "issuer not found returns user configuration NotFound",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					if ns.Name == testIssuerName {
+						return false, nil
+					}
+					if ns.Name == serviceExternalSecretWebhookName {
+						return false, nil
+					}
+					return false, nil
+				})
+			},
+			esc: func(esc *v1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ControllerConfig.CertProvider.CertManager.Mode = v1alpha1.Enabled
+				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
+			},
+			recon:                  false,
+			wantUserConfigErr:      true,
+			wantUserConfigNotFound: true,
 		},
 		{
 			name: "bitwarden enabled: secret ref exists (assertSecretRefExists returns)",
@@ -357,7 +414,56 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "bitwarden enabled: secret ref does not exist (assertSecretRefExists fails)",
+			name: "bitwarden enabled: secret ref not found returns user configuration error",
+			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
+				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
+					if ns.Name == serviceExternalSecretWebhookName {
+						esc := testExternalSecretsConfigForCertificate()
+						esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
+						desiredCert, _ := r.getCertificateObject(esc, testResourceMetadata(esc), webhookCertificateAssetName)
+						desiredCert.DeepCopyInto(obj.(*certmanagerv1.Certificate))
+						return true, nil
+					}
+					if ns.Name == testIssuerName {
+						return true, nil
+					}
+					return false, nil
+				})
+				m.GetCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) error {
+					switch o := obj.(type) {
+					case *corev1.Secret:
+						if ns.Name == "bitwarden-secret" && ns.Namespace == commontest.TestExternalSecretsNamespace {
+							return apierrors.NewNotFound(corev1.Resource("secrets"), ns.Name)
+						}
+					case *certmanagerv1.Issuer:
+						if ns.Name == testIssuerName && ns.Namespace == commontest.TestExternalSecretsNamespace {
+							testIssuer().DeepCopyInto(o)
+							return nil
+						}
+					}
+					return fmt.Errorf("object not found")
+				})
+				m.CreateCalls(func(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+					t.Errorf("Create was called when SecretRef assertion should have failed and returned early")
+					return nil
+				})
+			},
+			esc: func(esc *v1alpha1.ExternalSecretsConfig) {
+				esc.Spec.ControllerConfig.CertProvider.CertManager.Mode = v1alpha1.Enabled
+				esc.Spec.ControllerConfig.CertProvider.CertManager.IssuerRef.Name = testIssuerName
+				esc.Spec.Plugins.BitwardenSecretManagerProvider = &v1alpha1.BitwardenSecretManagerProvider{
+					SecretRef: &v1alpha1.SecretReference{
+						Name: "bitwarden-secret",
+					},
+					Mode: v1alpha1.Enabled,
+				}
+			},
+			recon:                  false,
+			wantUserConfigErr:      true,
+			wantUserConfigNotFound: true,
+		},
+		{
+			name: "bitwarden enabled: secret ref fetch fails with retryable error",
 			preReq: func(r *Reconciler, m *fakes.FakeCtrlClient) {
 				m.ExistsCalls(func(ctx context.Context, ns types.NamespacedName, obj client.Object) (bool, error) {
 					if ns.Name == serviceExternalSecretWebhookName {
@@ -401,8 +507,8 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 					Mode: v1alpha1.Enabled,
 				}
 			},
-			recon:   false,
-			wantErr: fmt.Sprintf("failed to fetch %q secret: %s", types.NamespacedName{Name: "bitwarden-secret", Namespace: commontest.TestExternalSecretsNamespace}, commontest.ErrTestClient),
+			recon:                false,
+			wantRetryRequiredErr: true,
 		},
 		{
 			name: "bitwarden disabled (explicitly nil): only webhook certificate reconciled",
@@ -539,8 +645,27 @@ func TestCreateOrApplyCertificates(t *testing.T) {
 			}
 
 			err := r.createOrApplyCertificates(esc, testResourceMetadata(esc), tt.recon)
-			if (tt.wantErr != "" || err != nil) && (err == nil || err.Error() != tt.wantErr) {
-				t.Errorf("createOrApplyCertificates() err: %v, wantErr: %v", err, tt.wantErr)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Errorf("createOrApplyCertificates() err: %v, wantErr: %v", err, tt.wantErr)
+				}
+			} else if err != nil && !tt.wantUserConfigErr && !tt.wantIrrecoverableErr && !tt.wantRetryRequiredErr {
+				t.Errorf("createOrApplyCertificates() unexpected err: %v", err)
+			}
+			if tt.wantUserConfigErr && !common.IsUserConfigurationError(err) {
+				t.Fatalf("createOrApplyCertificates() err = %v, want UserConfigurationError", err)
+			}
+			if tt.wantUserConfigNotFound && !common.IsUserConfigurationNotFound(err) {
+				t.Fatalf("createOrApplyCertificates() err = %v, want UserConfigurationNotFound", err)
+			}
+			if tt.wantIrrecoverableErr && !common.IsIrrecoverableError(err) {
+				t.Fatalf("createOrApplyCertificates() err = %v, want IrrecoverableError", err)
+			}
+			if tt.wantRetryRequiredErr && !common.IsRetryRequiredError(err) {
+				t.Fatalf("createOrApplyCertificates() err = %v, want RetryRequiredError", err)
+			}
+			if !tt.wantUserConfigErr && common.IsUserConfigurationError(err) {
+				t.Fatalf("createOrApplyCertificates() err = %v, unexpected UserConfigurationError", err)
 			}
 		})
 	}

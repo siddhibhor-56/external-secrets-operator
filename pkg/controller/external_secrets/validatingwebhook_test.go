@@ -80,7 +80,7 @@ func TestCreateOrApplyValidatingWebhookConfiguration(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: fmt.Sprintf("failed to create validatingWebhook resource %s: %s", testValidateWebhookConfigurationResourceName, commontest.ErrTestClient),
+			wantErr: fmt.Sprintf("failed to create ValidatingWebhookConfiguration %s: %s", testValidateWebhookConfigurationResourceName, commontest.ErrTestClient),
 		},
 		{
 			name: "validatingWebhookConfiguration creation successful",

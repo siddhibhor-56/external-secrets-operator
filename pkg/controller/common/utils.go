@@ -1,12 +1,14 @@
 package common
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -417,8 +419,8 @@ func containerSpecModified(desiredContainer, fetchedContainer *corev1.Container)
 		return true
 	}
 
-	// Check environment variables
-	if !reflect.DeepEqual(desiredContainer.Env, fetchedContainer.Env) {
+	// Check environment variables (order-insensitive)
+	if !envVarsEqual(desiredContainer.Env, fetchedContainer.Env) {
 		return true
 	}
 
@@ -459,8 +461,8 @@ func containerSpecModified(desiredContainer, fetchedContainer *corev1.Container)
 		return true
 	}
 
-	// Check volume mounts
-	if !reflect.DeepEqual(desiredContainer.VolumeMounts, fetchedContainer.VolumeMounts) {
+	// Check volume mounts (order-insensitive)
+	if !volumeMountsEqual(desiredContainer.VolumeMounts, fetchedContainer.VolumeMounts) {
 		return true
 	}
 
@@ -470,6 +472,43 @@ func containerSpecModified(desiredContainer, fetchedContainer *corev1.Container)
 	}
 
 	return false
+}
+
+// slicesEqualUnordered reports whether desired and fetched contain the same elements.
+// less defines a strict ordering used to sort copies before comparing with reflect.DeepEqual.
+func slicesEqualUnordered[T any](desired, fetched []T, less func(a, b T) int) bool {
+	if len(desired) != len(fetched) {
+		return false
+	}
+	if len(desired) == 0 {
+		return true
+	}
+
+	desiredSorted := slices.Clone(desired)
+	fetchedSorted := slices.Clone(fetched)
+	slices.SortFunc(desiredSorted, less)
+	slices.SortFunc(fetchedSorted, less)
+	return reflect.DeepEqual(desiredSorted, fetchedSorted)
+}
+
+func envVarLess(a, b corev1.EnvVar) int {
+	return cmp.Compare(a.Name, b.Name)
+}
+
+func volumeMountLess(a, b corev1.VolumeMount) int {
+	return cmp.Compare(a.Name, b.Name)
+}
+
+// envVarsEqual reports whether two env var slices are semantically equal.
+// Comparison is order-insensitive; copies are sorted before reflect.DeepEqual.
+func envVarsEqual(desired, fetched []corev1.EnvVar) bool {
+	return slicesEqualUnordered(desired, fetched, envVarLess)
+}
+
+// volumeMountsEqual reports whether two volume mount slices are semantically equal.
+// Comparison is order-insensitive; copies are sorted before reflect.DeepEqual.
+func volumeMountsEqual(desired, fetched []corev1.VolumeMount) bool {
+	return slicesEqualUnordered(desired, fetched, volumeMountLess)
 }
 
 func volumesEqual(desired, fetched []corev1.Volume) bool {
@@ -627,6 +666,23 @@ func ParseBool(val string) bool {
 // true when has `Enabled` and false for every other value.
 func EvalMode(val operatorv1alpha1.Mode) bool {
 	return val == operatorv1alpha1.Enabled
+}
+
+// IsFeatureEnabled reports whether the named feature is active on the ExternalSecretsManager.
+// When the feature is absent, esm is nil, or mode is not Enabled, false is returned.
+func IsFeatureEnabled(esm *operatorv1alpha1.ExternalSecretsManager, name operatorv1alpha1.FeatureName) bool {
+	if esm == nil {
+		return false
+	}
+
+	for _, feature := range esm.Spec.Features {
+		if feature.Name != name {
+			continue
+		}
+		return EvalMode(feature.Mode)
+	}
+
+	return false
 }
 
 // IsESMSpecEmpty returns whether ExternalSecretsManager CR Spec is empty.

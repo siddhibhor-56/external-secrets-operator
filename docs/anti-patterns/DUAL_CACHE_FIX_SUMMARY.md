@@ -16,6 +16,7 @@ Fixed the **dual cache race condition** by replacing two separate caches with a 
 ### Key Changes
 
 #### 1. Manager Configuration (`main.go`)
+
 ```diff
 mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
     Scheme:                 scheme,
@@ -27,6 +28,7 @@ mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 ```
 
 #### 2. New Cache Builder (`controller.go`)
+
 ```go
 // NEW: Configure manager's cache with label selectors
 func NewCacheBuilder() cache.NewCacheFunc {
@@ -45,6 +47,7 @@ func buildCacheObjectList() map[client.Object]cache.ByObject {
 ```
 
 #### 3. Simplified Client Creation
+
 ```diff
 func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, error) {
 -   c, err := BuildCustomClient(m, r)  // OLD: Created separate custom cache
@@ -60,6 +63,7 @@ func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, err
 ```
 
 #### 4. Removed
+
 - ❌ `BuildCustomClient()` function (~100 lines)
 - ❌ Custom cache creation logic
 - ❌ Custom client configuration
@@ -68,7 +72,8 @@ func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, err
 ## Before vs After
 
 ### Before (❌ Race Condition)
-```
+
+```text
 Kubernetes API
     ├── Manager Cache (watches) → Triggers Reconciliation
     └── Custom Cache (reads)    → Might not be synced!
@@ -77,7 +82,8 @@ Problem: Reconciler might read from unsynced custom cache
 ```
 
 ### After (✅ No Race)
-```
+
+```text
 Kubernetes API
     └── Unified Manager Cache → Both watches AND reads
 
@@ -97,6 +103,7 @@ Solution: Same cache for everything, guaranteed synced
 ## Testing
 
 ### Build Status
+
 ```bash
 $ make build
 ✅ SUCCESS - No compilation errors
@@ -105,21 +112,25 @@ $ make build
 ### Verification Steps
 
 1. **Deploy the operator:**
+
    ```bash
    make deploy
    ```
 
 2. **Check logs for unified cache:**
+
    ```bash
    kubectl logs -n external-secrets-operator deployment/external-secrets-operator-controller-manager | grep "cache-setup"
    ```
 
 3. **Create test resource:**
+
    ```bash
    kubectl apply -f config/samples/operator_v1alpha1_externalsecretsconfig.yaml
    ```
 
 4. **Verify immediate reconciliation:**
+
    ```bash
    kubectl get externalsecretsconfig cluster -w
    # Should show READY immediately, no delays
@@ -128,16 +139,20 @@ $ make build
 ## Migration Path
 
 ### For Developers
+
 No action needed - internal implementation change only.
 
 ### For Operators
+
 1. Rebuild operator image
 2. Deploy new version
 3. Observe reduced memory usage
 4. Verify no "not found" errors
 
 ### Rollback Plan
+
 If issues occur:
+
 ```bash
 git revert <this-commit-hash>
 make build && make deploy
@@ -146,12 +161,14 @@ make build && make deploy
 ## Performance Impact
 
 ### Expected Improvements
+
 - ✅ **50% reduction** in watch connections to API server
 - ✅ **50% reduction** in memory for cached objects
 - ✅ **No more race conditions** during startup/reconciliation
 - ✅ **Faster reconciliation** (no cache sync delays)
 
 ### Monitoring
+
 Watch these metrics after deployment:
 - Memory usage of operator pod (should decrease)
 - API server watch connection count (should decrease)
@@ -160,6 +177,7 @@ Watch these metrics after deployment:
 ## Related Work
 
 ### Inspiration
+
 This fix is based on the solution implemented in cert-manager-operator:
 - **PR:** https://github.com/openshift/cert-manager-operator/pull/324
 - **Issue:** https://issues.redhat.com/browse/CM-735
@@ -167,6 +185,7 @@ This fix is based on the solution implemented in cert-manager-operator:
 - **Solution:** Unified cache approach (same as applied here)
 
 ### References
+
 - [Controller-Runtime Cache Documentation](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/cache)
 - [Kubebuilder Book - Caching](https://book.kubebuilder.io/reference/watching-resources.html)
 - [Original AI Dialogue](https://gist.github.com/lunarwhite/8928d1dc8e35d0d23e6cc7a364985215)
@@ -199,4 +218,3 @@ Additional documentation created:
 **Build:** ✅ Passing  
 **Tests:** ⏭️ Pending E2E validation  
 **Risk Level:** 🟡 Medium (internal refactoring, well-tested pattern)
-

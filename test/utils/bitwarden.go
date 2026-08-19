@@ -39,11 +39,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/openshift/external-secrets-operator/pkg/controller/common"
+	externalsecrets "github.com/openshift/external-secrets-operator/pkg/controller/external_secrets"
 )
 
 const (
 	// BitwardenOperandNamespace is the namespace where bitwarden-sdk-server is deployed by ESO.
-	BitwardenOperandNamespace = "external-secrets"
+	BitwardenOperandNamespace = externalsecrets.OperandDefaultNamespace
 	// BitwardenSDKServerServiceName is the Kubernetes service name for bitwarden-sdk-server.
 	BitwardenSDKServerServiceName = "bitwarden-sdk-server"
 	// BitwardenSDKServerPort is the HTTPS port exposed by bitwarden-sdk-server.
@@ -67,11 +70,14 @@ const (
 // "token" matches the official external-secrets.io Bitwarden provider example.
 const TokenSecretKey = "token"
 
-// Bitwarden credentials secret (fixed name/namespace for e2e, like AWS aws-creds).
-// Document in docs/e2e/README.md. Keys: token, organization_id, project_id.
 const (
+	// BitwardenTLSSecretName is the Kubernetes secret created by e2e tests for the bitwarden-sdk-server
+	// plugin (keys: tls.crt, tls.key, ca.crt). Referenced by ExternalSecretsConfig secretRef — not bitwarden-creds.
+	BitwardenTLSSecretName = "bitwarden-tls-certs"
+	// Bitwarden credentials secret (fixed name/namespace for live Bitwarden cloud API e2e).
+	// Document in test/e2e/README.md. Keys: token, organization_id, project_id.
 	BitwardenCredSecretName      = "bitwarden-creds"
-	BitwardenCredSecretNamespace = "external-secrets-operator"
+	BitwardenCredSecretNamespace = common.ExternalSecretsOperatorCommonName
 	BitwardenCredKeyOrgID        = "organization_id"
 	BitwardenCredKeyProjectID    = "project_id"
 )

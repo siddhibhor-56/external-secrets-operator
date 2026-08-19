@@ -38,6 +38,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	olmv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/test/utils"
@@ -78,6 +79,7 @@ var _ = BeforeSuite(func() {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(operatorv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(olmv1alpha1.AddToScheme(scheme))
 	suiteRuntimeClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	Expect(err).NotTo(HaveOccurred(), "failed to create runtime client")
 })

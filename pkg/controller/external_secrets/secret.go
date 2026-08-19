@@ -28,27 +28,29 @@ func (r *Reconciler) createOrApplySecret(esc *operatorv1alpha1.ExternalSecretsCo
 		return common.FromClientError(err, "failed to check %s secret resource already exists", secretName)
 	}
 
-	if exist && recon {
+	if !exist {
+		// NOTE: This Secret cannot use the generic createWithFallback helper because
+		// its Data field is managed by the external-secrets cert-controller, which injects
+		// TLS content at runtime. On AlreadyExists we use a JSON patch that touches only
+		// metadata, leaving cert-controller-managed TLS certificates untouched.
+		return r.createWithMetadataFallback(desired, resourceMetadata, secretName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s secret resource already exists, maybe from previous installation", secretName)
 	}
 
-	if exist && common.ObjectMetadataModified(desired, fetched, &resourceMetadata) {
-		r.log.V(1).Info("secret has been modified, updating to desired state", "name", secretName)
-		common.RemoveObsoleteAnnotations(desired, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to update %s secret resource", secretName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "secret resource %s reconciled back to desired state", secretName)
-	} else {
+	if !common.ObjectMetadataModified(desired, fetched, &resourceMetadata) {
 		r.log.V(4).Info("secret resource already exists and is in expected state", "name", secretName)
+		return nil
 	}
 
-	if !exist {
-		if err := r.Create(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to create %s secret resource", secretName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "secret resource %s created", secretName)
+	r.log.V(1).Info("secret has been modified, patching metadata to desired state", "name", secretName)
+	if err := r.patchResourceMetadata(desired, resourceMetadata); err != nil {
+		return common.FromClientError(err, "failed to patch Secret %s metadata", secretName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "secret resource %s reconciled back to desired state", secretName)
+
 	return nil
 }
 

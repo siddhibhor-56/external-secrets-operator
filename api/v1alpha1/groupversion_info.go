@@ -28,6 +28,9 @@ var (
 	// GroupVersion is group version used to register these objects.
 	GroupVersion = schema.GroupVersion{Group: "operator.openshift.io", Version: "v1alpha1"}
 
+	// ExternalSecretsConfigGVR is the GroupVersionResource for ExternalSecretsConfig.
+	ExternalSecretsConfigGVR = GroupVersion.WithResource("externalsecretsconfigs")
+
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 

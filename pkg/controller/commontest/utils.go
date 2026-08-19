@@ -6,11 +6,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
+	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 )
 
 const (
 	// TestExternalSecretsConfigResourceName is the name for ExternalSecretsConfig test CR.
-	TestExternalSecretsConfigResourceName = "cluster"
+	TestExternalSecretsConfigResourceName = common.ExternalSecretsConfigObjectName
 
 	// TestExternalSecretsImageName is the sample image name for external-secrets operand.
 	TestExternalSecretsImageName = "registry.redhat.io/external-secrets-operator/external-secrets-operator-rhel9"
@@ -18,7 +19,7 @@ const (
 	// TestBitwardenImageName is the sample image name for bitwarden-sdk-server.
 	TestBitwardenImageName = "registry.stage.redhat.io/external-secrets-operator/bitwarden-sdk-server-rhel9"
 
-	// TestExternalSecretsNamespace is the sample namespace name for external-secrets deployment.
+	// TestExternalSecretsNamespace is the namespace name for external-secrets deployment.
 	TestExternalSecretsNamespace = "external-secrets"
 
 	// TestCRDName can be used for sample CRD resources.

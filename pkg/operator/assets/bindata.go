@@ -154,12 +154,12 @@ func externalSecretsExternalSecretsNamespaceYaml() (*asset, error) {
 var _externalSecretsNetworkpolicy_allowApiServerAndWebhookTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-webhook
+  name: eso-sys-allow-api-server-egress-for-webhook
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 spec:
@@ -204,12 +204,12 @@ func externalSecretsNetworkpolicy_allowApiServerAndWebhookTrafficYaml() (*asset,
 var _externalSecretsNetworkpolicy_allowApiServerEgressForBitwardenSeverYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-bitwarden-server
+  name: eso-sys-allow-api-server-egress-for-bitwarden-server
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: bitwarden-sdk-server
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   podSelector:
@@ -249,12 +249,12 @@ func externalSecretsNetworkpolicy_allowApiServerEgressForBitwardenSeverYaml() (*
 var _externalSecretsNetworkpolicy_allowApiServerEgressForCertControllerTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-cert-controller
+  name: eso-sys-allow-api-server-egress-for-cert-controller
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   podSelector:
@@ -295,12 +295,12 @@ func externalSecretsNetworkpolicy_allowApiServerEgressForCertControllerTrafficYa
 var _externalSecretsNetworkpolicy_allowApiServerEgressForMainControllerTrafficYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-api-server-egress-for-main-controller
+  name: eso-sys-allow-api-server-egress-for-main-controller
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   podSelector:
@@ -344,9 +344,9 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
-  name: allow-to-dns
+  name: eso-sys-allow-to-dns
 spec:
   podSelector:
     matchExpressions:
@@ -373,8 +373,7 @@ spec:
         - protocol: UDP
           port: 53
   policyTypes:
-      - Egress
-`)
+      - Egress`)
 
 func externalSecretsNetworkpolicy_allowDnsYamlBytes() ([]byte, error) {
 	return _externalSecretsNetworkpolicy_allowDnsYaml, nil
@@ -394,12 +393,12 @@ func externalSecretsNetworkpolicy_allowDnsYaml() (*asset, error) {
 var _externalSecretsNetworkpolicy_denyAllYaml = []byte(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-all-traffic
+  name: eso-sys-deny-all-traffic
   namespace: external-secrets
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v1.1.0"
+    app.kubernetes.io/version: "v1.2.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   podSelector: {}
@@ -431,7 +430,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 spec:
@@ -444,7 +443,7 @@ spec:
     group: cert-manager.io
     kind: Issuer
     name: my-issuer
-  duration: "8760h"
+  duration: "8760h0m0s"
   secretName: external-secrets-webhook
 `)
 
@@ -471,7 +470,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 rules:
   - apiGroups:
@@ -569,7 +568,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 rules:
   - apiGroups:
@@ -736,7 +735,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
@@ -806,7 +805,7 @@ metadata:
     servicebinding.io/controller: "true"
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 rules:
   - apiGroups:
@@ -843,7 +842,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     rbac.authorization.k8s.io/aggregate-to-view: "true"
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
@@ -909,7 +908,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -944,7 +943,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -980,7 +979,7 @@ metadata:
   labels:
     app.kubernetes.io/name: bitwarden-sdk-server
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.5.1"
+    app.kubernetes.io/version: "v0.6.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   replicas: 1
@@ -999,7 +998,7 @@ spec:
       containers:
         - name: bitwarden-sdk-server
           securityContext: {}
-          image: "ghcr.io/external-secrets/bitwarden-sdk-server:v0.5.1"
+          image: "ghcr.io/external-secrets/bitwarden-sdk-server:v0.6.0"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - mountPath: /certs
@@ -1022,6 +1021,7 @@ spec:
       volumes:
         - name: bitwarden-tls-certs
           secret:
+            secretName: bitwarden-tls-certs
             items:
               - key: tls.crt
                 path: cert.pem
@@ -1029,7 +1029,6 @@ spec:
                 path: key.pem
               - key: ca.crt
                 path: ca.pem
-            secretName: bitwarden-tls-certs
 `)
 
 func externalSecretsResourcesDeployment_bitwardenSdkServerYmlBytes() ([]byte, error) {
@@ -1056,7 +1055,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   replicas: 1
@@ -1070,7 +1069,7 @@ spec:
       labels:
         app.kubernetes.io/name: external-secrets-cert-controller
         app.kubernetes.io/instance: external-secrets
-        app.kubernetes.io/version: "v0.20.4"
+        app.kubernetes.io/version: "v2.5.0"
         app.kubernetes.io/managed-by: external-secrets-operator
     spec:
       serviceAccountName: external-secrets-cert-controller
@@ -1088,7 +1087,7 @@ spec:
             runAsUser: 1000
             seccompProfile:
               type: RuntimeDefault
-          image: oci.external-secrets.io/external-secrets/external-secrets:v0.20.4
+          image: ghcr.io/external-secrets/external-secrets:v2.5.0
           imagePullPolicy: IfNotPresent
           args:
             - certcontroller
@@ -1106,12 +1105,18 @@ spec:
             - containerPort: 8080
               protocol: TCP
               name: metrics
+            - containerPort: 8081
+              protocol: TCP
+              name: ready
           readinessProbe:
             httpGet:
-              port: 8081
+              port: ready
               path: /readyz
             initialDelaySeconds: 20
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
 `)
 
 func externalSecretsResourcesDeployment_externalSecretsCertControllerYmlBytes() ([]byte, error) {
@@ -1138,7 +1143,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   replicas: 1
@@ -1152,7 +1157,7 @@ spec:
       labels:
         app.kubernetes.io/name: external-secrets-webhook
         app.kubernetes.io/instance: external-secrets
-        app.kubernetes.io/version: "v0.20.4"
+        app.kubernetes.io/version: "v2.5.0"
         app.kubernetes.io/managed-by: external-secrets-operator
     spec:
       hostNetwork: false
@@ -1170,7 +1175,7 @@ spec:
             runAsUser: 1000
             seccompProfile:
               type: RuntimeDefault
-          image: oci.external-secrets.io/external-secrets/external-secrets:v0.20.4
+          image: ghcr.io/external-secrets/external-secrets:v2.5.0
           imagePullPolicy: IfNotPresent
           args:
             - webhook
@@ -1189,12 +1194,18 @@ spec:
             - containerPort: 10250
               protocol: TCP
               name: webhook
+            - containerPort: 8081
+              protocol: TCP
+              name: ready
           readinessProbe:
             httpGet:
-              port: 8081
+              port: ready
               path: /readyz
             initialDelaySeconds: 20
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
           volumeMounts:
             - name: certs
               mountPath: /tmp/certs
@@ -1229,7 +1240,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   replicas: 1
@@ -1243,7 +1254,7 @@ spec:
       labels:
         app.kubernetes.io/name: external-secrets
         app.kubernetes.io/instance: external-secrets
-        app.kubernetes.io/version: "v0.20.4"
+        app.kubernetes.io/version: "v2.5.0"
         app.kubernetes.io/managed-by: external-secrets-operator
     spec:
       serviceAccountName: external-secrets
@@ -1261,7 +1272,7 @@ spec:
             runAsUser: 1000
             seccompProfile:
               type: RuntimeDefault
-          image: oci.external-secrets.io/external-secrets/external-secrets:v0.20.4
+          image: ghcr.io/external-secrets/external-secrets:v2.5.0
           imagePullPolicy: IfNotPresent
           args:
             - --concurrent=1
@@ -1303,7 +1314,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 rules:
   - apiGroups:
@@ -1357,7 +1368,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -1393,7 +1404,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 `)
@@ -1422,7 +1433,7 @@ metadata:
   labels:
     app.kubernetes.io/name: bitwarden-sdk-server
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.5.1"
+    app.kubernetes.io/version: "v0.6.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   type: ClusterIP
@@ -1459,7 +1470,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   type: ClusterIP
@@ -1497,7 +1508,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 spec:
   type: ClusterIP
@@ -1535,7 +1546,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 spec:
@@ -1578,7 +1589,7 @@ metadata:
   labels:
     app.kubernetes.io/name: bitwarden-sdk-server
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.5.1"
+    app.kubernetes.io/version: "v0.6.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 `)
 
@@ -1606,7 +1617,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-cert-controller
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 `)
 
@@ -1634,7 +1645,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 `)
 
@@ -1662,7 +1673,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
 `)
 
@@ -1689,7 +1700,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 webhooks:
@@ -1734,7 +1745,7 @@ metadata:
   labels:
     app.kubernetes.io/name: external-secrets-webhook
     app.kubernetes.io/instance: external-secrets
-    app.kubernetes.io/version: "v0.20.4"
+    app.kubernetes.io/version: "v2.5.0"
     app.kubernetes.io/managed-by: external-secrets-operator
     external-secrets.io/component: webhook
 webhooks:
@@ -1753,6 +1764,7 @@ webhooks:
     admissionReviewVersions: ["v1", "v1beta1"]
     sideEffects: None
     timeoutSeconds: 5
+    failurePolicy: Fail
   - name: "validate.clustersecretstore.external-secrets.io"
     rules:
       - apiGroups: ["external-secrets.io"]
@@ -1768,6 +1780,7 @@ webhooks:
     admissionReviewVersions: ["v1", "v1beta1"]
     sideEffects: None
     timeoutSeconds: 5
+    failurePolicy: Fail
 `)
 
 func externalSecretsResourcesValidatingwebhookconfiguration_secretstoreValidateYmlBytes() ([]byte, error) {

@@ -22,6 +22,11 @@ const (
 	// Examples include temporary network issues or resource conflicts.
 	// The reconciler should requeue when encountering this error type.
 	RetryRequiredError ErrorReason = "RetryRequiredError"
+
+	// UserConfigurationError indicates user-provided configuration is invalid or incomplete.
+	// The operator sets Degraded. Recovery is driven by watches on the affected resource;
+	// NotFound errors still use periodic requeue until the referenced object exists.
+	UserConfigurationError ErrorReason = "UserConfigurationError"
 )
 
 // ReconcileError represents an error that occurred during reconciliation.
@@ -66,6 +71,18 @@ func NewRetryRequiredError(err error, message string, args ...any) *ReconcileErr
 	}
 }
 
+// NewUserConfigurationError creates a ReconcileError for invalid or incomplete user configuration.
+func NewUserConfigurationError(err error, message string, args ...any) *ReconcileError {
+	if err == nil {
+		return nil
+	}
+	return &ReconcileError{
+		Reason:  UserConfigurationError,
+		Message: fmt.Sprintf(message, args...),
+		Err:     err,
+	}
+}
+
 // IsIrrecoverableError checks if the given error is a ReconcileError
 // with IrrecoverableError reason. Returns false if err is nil or
 // not a ReconcileError.
@@ -75,6 +92,33 @@ func IsIrrecoverableError(err error) bool {
 		return rerr.Reason == IrrecoverableError
 	}
 	return false
+}
+
+// IsRetryRequiredError checks if the given error is a ReconcileError with RetryRequiredError reason.
+func IsRetryRequiredError(err error) bool {
+	rerr := &ReconcileError{}
+	if errors.As(err, &rerr) {
+		return rerr.Reason == RetryRequiredError
+	}
+	return false
+}
+
+// IsUserConfigurationError checks if the given error is a ReconcileError with UserConfigurationError reason.
+func IsUserConfigurationError(err error) bool {
+	rerr := &ReconcileError{}
+	if errors.As(err, &rerr) {
+		return rerr.Reason == UserConfigurationError
+	}
+	return false
+}
+
+// IsUserConfigurationNotFound reports whether err is a UserConfigurationError caused by a missing object.
+func IsUserConfigurationNotFound(err error) bool {
+	rerr := &ReconcileError{}
+	if !errors.As(err, &rerr) || rerr.Reason != UserConfigurationError {
+		return false
+	}
+	return apierrors.IsNotFound(rerr.Err)
 }
 
 // Error implements the error interface, returning a formatted string
@@ -92,8 +136,8 @@ func (e *ReconcileError) Unwrap() error {
 
 // FromClientError creates a ReconcileError from a Kubernetes API client error.
 // It automatically determines the error reason based on the API error type:
-//   - IrrecoverableError: Unauthorized, Forbidden, Invalid, BadRequest, ServiceUnavailable
-//   - RetryRequiredError: All other errors (e.g., NotFound, Conflict, Timeout)
+//   - IrrecoverableError: Unauthorized, Forbidden, Invalid, BadRequest
+//   - RetryRequiredError: All other errors (e.g., NotFound, Conflict, Timeout, ServiceUnavailable)
 //
 // Returns nil if the provided error is nil.
 // The message supports fmt.Sprintf-style formatting with the provided args.

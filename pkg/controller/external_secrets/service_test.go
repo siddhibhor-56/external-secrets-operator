@@ -62,7 +62,7 @@ func TestCreateOrApplyServices(t *testing.T) {
 					},
 				}
 			},
-			wantErr: `failed to create service external-secrets/bitwarden-sdk-server: test client error`,
+			wantErr: `failed to create Service external-secrets/bitwarden-sdk-server: test client error`,
 		},
 
 		{
@@ -107,7 +107,7 @@ func TestCreateOrApplyServices(t *testing.T) {
 					return commontest.ErrTestClient
 				})
 			},
-			wantErr: `failed to create service external-secrets/external-secrets-webhook: test client error`,
+			wantErr: `failed to create Service external-secrets/external-secrets-webhook: test client error`,
 		},
 		{
 			name: "service with custom annotations applied successfully",

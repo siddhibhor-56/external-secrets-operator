@@ -129,7 +129,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `componentName` _[ComponentName](#componentname)_ | componentName identifies which external-secrets component this configuration applies to.<br />Valid component names: ExternalSecretsCoreController, Webhook, CertController, BitwardenSDKServer. |  | Enum: [ExternalSecretsCoreController Webhook CertController BitwardenSDKServer] <br /> |
 | `deploymentConfigs` _[DeploymentConfig](#deploymentconfig)_ | deploymentConfigs specifies overrides for the Kubernetes Deployment resource of this component. |  |  |
-| `overrideEnv` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#envvar-v1-core) array_ | overrideEnv specifies custom environment variables for this component's container. These are merged with operator-managed environment variables, with user-defined values taking precedence.<br />Keys starting with 'HOSTNAME', 'KUBERNETES_', or 'EXTERNAL_SECRETS_' are reserved and will be rejected. |  | MaxItems: 50 <br /> |
+| `overrideEnv` _[EnvVar](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#envvar-v1-core) array_ | overrideEnv specifies custom environment variables for this component's container. These are merged with operator-managed environment variables, with user-defined values taking precedence.<br />Names starting with 'KUBERNETES_' or 'EXTERNAL_SECRETS_' are reserved prefixes and will be rejected.<br />The exact names 'HOSTNAME', 'SSL_CERT_DIR', and 'SSL_CERT_FILE' are also reserved. |  | MaxItems: 50 <br /> |
 
 
 #### ComponentName
@@ -186,6 +186,23 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#condition-v1-meta) array_ | conditions holds information of the current state of deployment. |  |  |
 
 
+#### ConfigMapKeyReference
+
+
+
+ConfigMapKeyReference refers to a specific key within a ConfigMap.
+
+
+
+_Appears in:_
+- [ControllerConfig](#controllerconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | name of the ConfigMap resource being referred to. |  | MaxLength: 253 <br />MinLength: 1 <br /> |
+| `key` _string_ | key is the specific key in the ConfigMap to be utilized.<br />When omitted, defaults to "ca-bundle.crt". | ca-bundle.crt | MaxLength: 253 <br />MinLength: 1 <br />Pattern: `^[-._a-zA-Z0-9]+$` <br /> |
+
+
 #### ControllerConfig
 
 
@@ -204,6 +221,7 @@ _Appears in:_
 | `annotations` _object (keys:string, values:string)_ | annotations are for adding custom annotations to all the resources created for external-secrets deployment.<br />The annotations are merged with any default annotations set by the operator. User-specified annotations take precedence over defaults in case of conflicts.<br />Annotation keys containing domains `kubernetes.io/`, `openshift.io/`, `cert-manager.io/` or `k8s.io/` (including subdomains like `*.kubernetes.io/`) are not allowed. |  | MaxProperties: 20 <br />MinProperties: 0 <br /> |
 | `networkPolicies` _[NetworkPolicy](#networkpolicy) array_ | networkPolicies specifies the list of network policy configurations<br />to be applied to external-secrets pods.<br />Each entry allows specifying a name for the generated NetworkPolicy object,<br />along with its full Kubernetes NetworkPolicy definition.<br />The operator prepends "eso-user-" to the provided name when creating the Kubernetes object.<br />If this field is not provided, external-secrets components will be isolated<br />with deny-all network policies, which will prevent proper operation. |  | MaxItems: 50 <br />MinItems: 0 <br /> |
 | `componentConfigs` _[ComponentConfig](#componentconfig) array_ | componentConfigs allows specifying deployment-level configuration overrides for individual external-secrets components. This field enables fine-grained control over deployment settings for each component independently.<br />Each component can only have one configuration entry. |  | MaxItems: 4 <br />MinItems: 0 <br /> |
+| `trustedCABundle` _[ConfigMapKeyReference](#configmapkeyreference)_ | trustedCABundle references a ConfigMap containing PEM-encoded CA certificates for the external-secrets core controller to trust when making outbound TLS connections.<br />If specified, this bundle is used for all outbound TLS traffic, including connections to external secret management systems and configured proxies.<br />The ConfigMap must exist in the external-secrets operand namespace and must not carry the CNO inject-trusted-cabundle label when proxy is configured.<br />When omitted, external providers use standard system certificates. When proxy is configured, proxy TLS connections use the operator-managed<br />OpenShift trusted CA bundle injected by the Cluster Network Operator. |  |  |
 
 
 #### ControllerStatus
@@ -373,6 +391,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `globalConfig` _[GlobalConfig](#globalconfig)_ | globalConfig is for configuring the behavior of deployments that are managed by external secrets-operator. |  |  |
+| `features` _[Feature](#feature) array_ | features configures optional capabilities across deployments managed by the external-secrets-operator,<br />including the operator itself and any current or future operands.<br />Each entry is uniquely identified by name and can be individually enabled or disabled.<br />This field can have a maximum of 1 entry. |  | MaxItems: 1 <br />MinItems: 0 <br /> |
 
 
 #### ExternalSecretsManagerStatus
@@ -390,6 +409,39 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `controllerStatuses` _[ControllerStatus](#controllerstatus) array_ | controllerStatuses holds the observed conditions of the controllers part of the operator. |  |  |
 | `lastTransitionTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#time-v1-meta)_ | lastTransitionTime is the last time the condition transitioned from one status to another. |  | Format: date-time <br />Type: string <br /> |
+
+
+#### Feature
+
+
+
+Feature configures an optional capability that is applied by the external-secrets-operator across its managed deployments.
+
+
+
+_Appears in:_
+- [ExternalSecretsManagerSpec](#externalsecretsmanagerspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _[FeatureName](#featurename)_ | name identifies the optional feature to configure.<br />Currently, the only supported value is UnsafeAllowGenericTargets. |  | Enum: [UnsafeAllowGenericTargets] <br /> |
+| `mode` _[Mode](#mode)_ | mode controls whether the feature is active.<br />When set to Enabled, the operator applies the configuration associated with the named feature to the relevant managed deployments.<br />For UnsafeAllowGenericTargets, this passes the `--unsafe-allow-generic-targets` flag to the external-secrets core controller,<br />allowing ExternalSecret resources to target Kubernetes resources other than Secrets (for example, ConfigMaps or custom resources).<br />Warning: Generic targets require additional RBAC permissions on the affected operand; enabling this feature without the appropriate permissions will cause reconciliation failures. | Disabled | Enum: [Enabled Disabled] <br /> |
+
+
+#### FeatureName
+
+_Underlying type:_ _string_
+
+FeatureName identifies an optional feature that can be configured on the ExternalSecretsManager and applied by the external-secrets-operator.
+
+
+
+_Appears in:_
+- [Feature](#feature)
+
+| Field | Description |
+| --- | --- |
+| `UnsafeAllowGenericTargets` | UnsafeAllowGenericTargets configures the external-secrets core controller to run with the `--unsafe-allow-generic-targets` startup flag,<br />which allows ExternalSecret resources to sync data into Kubernetes resources other than Secrets.<br /> |
 
 
 #### GlobalConfig
@@ -442,6 +494,7 @@ Mode indicates the operational state of the optional features.
 _Appears in:_
 - [BitwardenSecretManagerProvider](#bitwardensecretmanagerprovider)
 - [CertManagerConfig](#certmanagerconfig)
+- [Feature](#feature)
 
 | Field | Description |
 | --- | --- |
@@ -463,7 +516,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | Name is the logical identifier for this network policy entry.<br />The operator prepends "eso-user-" to this value when creating the Kubernetes<br />NetworkPolicy object (e.g. "allow-egress" becomes "eso-user-allow-egress"). |  | MaxLength: 253 <br />MinLength: 1 <br /> |
+| `name` _string_ | Name is the logical identifier for this network policy entry.<br />The operator prepends "eso-user-" to this value when creating the Kubernetes<br />NetworkPolicy object (e.g. "allow-egress" becomes "eso-user-allow-egress").<br />Maximum length is 243 to accommodate the prefix within the 253-character Kubernetes name limit. |  | MaxLength: 243 <br />MinLength: 1 <br /> |
 | `componentName` _[ComponentName](#componentname)_ | componentName specifies which external-secrets component this network policy applies to. |  | Enum: [ExternalSecretsCoreController BitwardenSDKServer] <br /> |
 | `egress` _[NetworkPolicyEgressRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#networkpolicyegressrule-v1-networking) array_ | egress is a list of egress rules to be applied to the selected pods. Outgoing traffic<br />is allowed if there are no NetworkPolicies selecting the pod (and cluster policy<br />otherwise allows the traffic), OR if the traffic matches at least one egress rule<br />across all the NetworkPolicy objects whose podSelector matches the pod. If<br />this field is empty then this NetworkPolicy limits all outgoing traffic (and serves<br />solely to ensure that the pods it selects are isolated by default).<br />The operator will automatically handle ingress rules based on the current running ports. |  |  |
 
@@ -515,7 +568,7 @@ _Appears in:_
 | `httpProxy` _string_ | httpProxy is the URL of the proxy for HTTP requests.<br />This field can have a maximum of 2048 characters. |  | MaxLength: 2048 <br />MinLength: 0 <br /> |
 | `httpsProxy` _string_ | httpsProxy is the URL of the proxy for HTTPS requests.<br />This field can have a maximum of 2048 characters. |  | MaxLength: 2048 <br />MinLength: 0 <br /> |
 | `noProxy` _string_ | noProxy is a comma-separated list of hostnames and/or CIDRs and/or IPs for which the proxy should not be used.<br />This field can have a maximum of 4096 characters. |  | MaxLength: 4096 <br />MinLength: 0 <br /> |
-| `networkPolicyProvisioning` _[ManagementState](#managementstate)_ | NetworkPolicyProvisioning defines the management strategy for the proxy egress rule.<br />When set to Managed, the operator automatically provisions and maintains<br />a NetworkPolicy allowing traffic to the configured proxy.<br />If no proxy is configured, no NetworkPolicy will be created<br />regardless of this setting. | Managed | Enum: [Managed Unmanaged] <br /> |
+| `networkPolicyProvisioning` _[ManagementState](#managementstate)_ | networkPolicyProvisioning defines the management strategy for the proxy egress rule.<br />When set to Managed, the operator automatically provisions and maintains a NetworkPolicy allowing traffic to the configured proxy.<br />If no proxy is configured, no NetworkPolicy will be created regardless of this setting. | Managed | Enum: [Managed Unmanaged] <br /> |
 
 
 #### SecretReference

@@ -32,13 +32,14 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
+	"github.com/openshift/external-secrets-operator/pkg/controller/common"
+	externalsecrets "github.com/openshift/external-secrets-operator/pkg/controller/external_secrets"
 )
 
 const (
-	operandNamespaceName = "external-secrets"
-	operandLabelSelector = "app=external-secrets"
-
-	externalSecretsConfigName = "cluster"
+	operandLabelSelector = externalsecrets.ManagedResourceLabelKey + "=" + externalsecrets.ManagedResourceLabelValue
 )
 
 // CleanupESOOperandAndRelated removes operand CR instances (by listing CRDs with app=external-secrets),
@@ -86,7 +87,7 @@ func CleanupESOOperandAndRelated(ctx context.Context, cfg *rest.Config) {
 				_ = dynamicClient.Resource(gvr).Delete(ctx, list.Items[j].GetName(), metav1.DeleteOptions{})
 			}
 		} else {
-			list, err := dynamicClient.Resource(gvr).Namespace(operandNamespaceName).List(ctx, metav1.ListOptions{})
+			list, err := dynamicClient.Resource(gvr).Namespace(externalsecrets.OperandDefaultNamespace).List(ctx, metav1.ListOptions{})
 			if err != nil {
 				if k8serrors.IsNotFound(err) {
 					continue // namespace already gone
@@ -94,14 +95,13 @@ func CleanupESOOperandAndRelated(ctx context.Context, cfg *rest.Config) {
 				continue
 			}
 			for j := range list.Items {
-				_ = dynamicClient.Resource(gvr).Namespace(operandNamespaceName).Delete(ctx, list.Items[j].GetName(), metav1.DeleteOptions{})
+				_ = dynamicClient.Resource(gvr).Namespace(externalsecrets.OperandDefaultNamespace).Delete(ctx, list.Items[j].GetName(), metav1.DeleteOptions{})
 			}
 		}
 	}
 
 	// 2. Delete the cluster ExternalSecretsConfig instance (operator.openshift.io).
-	escGVR := schema.GroupVersionResource{Group: "operator.openshift.io", Version: "v1alpha1", Resource: "externalsecretsconfigs"}
-	_ = dynamicClient.Resource(escGVR).Delete(ctx, externalSecretsConfigName, metav1.DeleteOptions{})
+	_ = dynamicClient.Resource(operatorv1alpha1.ExternalSecretsConfigGVR).Delete(ctx, common.ExternalSecretsConfigObjectName, metav1.DeleteOptions{})
 
 	// 3. Remove webhooks first so namespace deletion can proceed.
 	webhooks, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().List(ctx, metav1.ListOptions{LabelSelector: operandLabelSelector})
@@ -129,7 +129,7 @@ func CleanupESOOperandAndRelated(ctx context.Context, cfg *rest.Config) {
 	}
 
 	// 5. Operand namespace.
-	_ = clientset.CoreV1().Namespaces().Delete(ctx, operandNamespaceName, metav1.DeleteOptions{})
+	_ = clientset.CoreV1().Namespaces().Delete(ctx, externalsecrets.OperandDefaultNamespace, metav1.DeleteOptions{})
 }
 
 // preferredVersion returns the stored/serving version for the CRD (first version with Storage: true, else first version).

@@ -31,7 +31,7 @@ var (
 // removed from resources (e.g. spec a,b→c,d: we remove a,b from resources first, then patch CR).
 func (r *Reconciler) reconcileExternalSecretsDeployment(esc *operatorv1alpha1.ExternalSecretsConfig, recon bool) error {
 	if err := r.validateExternalSecretsConfig(esc); err != nil {
-		return common.NewIrrecoverableError(err, "%s/%s configuration validation failed", esc.GetObjectKind().GroupVersionKind().String(), esc.GetName())
+		return err
 	}
 
 	resourceMetadata, err := r.getResourceMetadata(esc)
@@ -160,21 +160,25 @@ func (r *Reconciler) createOrApplyNamespace(esc *operatorv1alpha1.ExternalSecret
 		return fmt.Errorf("failed to check if namespace %s exists: %w", namespaceName, err)
 	}
 
-	switch {
-	case !exists:
+	if !exists {
 		r.log.V(4).Info("Creating namespace", "name", namespaceName)
 		if err := r.Create(r.ctx, desired); err != nil {
 			return fmt.Errorf("failed to create namespace %s: %w", namespaceName, err)
 		}
 		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "Namespace %s created", namespaceName)
-	case r.resourceMetadataNeedsUpdate(fetched, resourceMetadata):
-		if err := r.UpdateWithRetry(r.ctx, fetched); err != nil {
-			return fmt.Errorf("failed to update namespace %s: %w", namespaceName, err)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "Namespace %s updated", namespaceName)
-	default:
-		r.log.V(4).Info("Namespace already exists in desired state", "name", namespaceName)
+		return nil
 	}
+
+	if !r.resourceMetadataNeedsUpdate(fetched, resourceMetadata) {
+		r.log.V(4).Info("Namespace already exists in desired state", "name", namespaceName)
+		return nil
+	}
+
+	r.log.V(1).Info("Namespace has been modified, updating to desired state", "name", namespaceName)
+	if err := r.UpdateWithRetry(r.ctx, fetched); err != nil {
+		return fmt.Errorf("failed to update namespace %s: %w", namespaceName, err)
+	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "Namespace %s updated", namespaceName)
 
 	return nil
 }
@@ -258,7 +262,7 @@ func (r *Reconciler) getResourceMetadata(esc *operatorv1alpha1.ExternalSecretsCo
 // and defaultLabels have the highest priority. Labels matching DisallowedLabelMatcher are skipped.
 func (r *Reconciler) getResourceLabels(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata *common.ResourceMetadata) {
 	resourceMetadata.Labels = make(map[string]string)
-	if r.esm != nil && common.IsESMSpecEmpty(r.esm) && r.esm.Spec.GlobalConfig != nil {
+	if common.IsESMSpecEmpty(r.esm) && r.esm.Spec.GlobalConfig != nil {
 		for k, v := range r.esm.Spec.GlobalConfig.Labels {
 			if disallowedLabelMatcher.MatchString(k) {
 				r.log.V(1).Info("skip adding unallowed label configured in externalsecretsmanagers.operator.openshift.io", "label", k, "value", v)

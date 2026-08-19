@@ -9,15 +9,21 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr/testr"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
+	"github.com/openshift/external-secrets-operator/pkg/controller/client/fakes"
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/controller/commontest"
 	"github.com/openshift/external-secrets-operator/pkg/operator/assets"
@@ -26,7 +32,6 @@ import (
 // testResourceMetadata returns a ResourceMetadata with the default labels and
 // annotations from the given ExternalSecretsConfig.
 func testResourceMetadata(esc *operatorv1alpha1.ExternalSecretsConfig) common.ResourceMetadata {
-
 	return common.ResourceMetadata{
 		Labels:                controllerDefaultResourceLabels,
 		Annotations:           esc.Spec.ControllerConfig.Annotations,
@@ -36,13 +41,18 @@ func testResourceMetadata(esc *operatorv1alpha1.ExternalSecretsConfig) common.Re
 
 // testReconciler returns a sample Reconciler instance.
 func testReconciler(t *testing.T) *Reconciler {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(certmanagerv1.AddToScheme(scheme))
+
 	return &Reconciler{
-		Scheme:                runtime.NewScheme(),
+		Scheme:                scheme,
 		ctx:                   context.Background(),
 		eventRecorder:         record.NewFakeRecorder(100),
 		log:                   testr.New(t),
 		esm:                   commontest.TestExternalSecretsManager(),
 		optionalResourcesList: make(map[string]struct{}),
+		now:                   &common.Now{},
 	}
 }
 
@@ -140,4 +150,36 @@ func testNetworkPolicy(assetName string) *networkingv1.NetworkPolicy {
 	networkPolicy := common.DecodeNetworkPolicyObjBytes(assets.MustAsset(assetName))
 	networkPolicy.SetLabels(controllerDefaultResourceLabels)
 	return networkPolicy
+}
+
+func testUserCAConfigMap(name string, pem string, labels map[string]string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: OperandDefaultNamespace,
+			Labels:    labels,
+		},
+		Data: map[string]string{
+			UserCABundleKeyPath: pem,
+		},
+	}
+}
+
+func setupConfigMapClients(t *testing.T, cm *corev1.ConfigMap) (*fakes.FakeCtrlClient, *fakes.FakeCtrlClient) {
+	t.Helper()
+	cached := &fakes.FakeCtrlClient{}
+	uncached := &fakes.FakeCtrlClient{}
+	stubGet := func(_ context.Context, ns types.NamespacedName, obj client.Object) error {
+		if ns != client.ObjectKeyFromObject(cm) {
+			return apierrors.NewNotFound(corev1.Resource("configmaps"), ns.Name)
+		}
+		cm.DeepCopyInto(obj.(*corev1.ConfigMap))
+		return nil
+	}
+	cached.GetCalls(stubGet)
+	uncached.GetCalls(stubGet)
+	uncached.PatchCalls(func(context.Context, client.Object, client.Patch, ...client.PatchOption) error {
+		return nil
+	})
+	return cached, uncached
 }

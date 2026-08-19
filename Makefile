@@ -16,9 +16,9 @@ export XDG_CONFIG_HOME ?= $(PROJECT_ROOT)/_output/.config
 
 # IMG_VERSION defines the images version for the operator, bundle and catalog (must be valid semver: Major.Minor.Patch).
 # To re-generate any image for another specific version without changing the standard setup, you can:
-# - use the IMG_VERSION as arg of the specific image build and push targets (e.g make IMG_VERSION=1.1.0 bundle-build bundle-push)
-# - use environment variables to overwrite this value (e.g export IMG_VERSION=1.1.0)
-IMG_VERSION ?= 1.1.0
+# - use the IMG_VERSION as arg of the specific image build and push targets (e.g make IMG_VERSION=1.2.0 bundle-build bundle-push)
+# - use environment variables to overwrite this value (e.g export IMG_VERSION=1.2.0)
+IMG_VERSION ?= 1.2.0
 
 # Validate IMG_VERSION is valid semver (Major.Minor.Patch), fallback to default if not.
 ifneq ($(shell echo '$(IMG_VERSION)' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' && echo valid),valid)
@@ -26,7 +26,7 @@ $(error IMG_VERSION '$(IMG_VERSION)' is not valid semver (expected: Major.Minor.
 endif
 
 # EXTERNAL_SECRETS_VERSION defines the external-secrets release version to fetch helm charts.
-EXTERNAL_SECRETS_VERSION ?= v0.20.4
+EXTERNAL_SECRETS_VERSION ?= v2.5.0
 
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
@@ -73,7 +73,7 @@ endif
 
 # IMG is the image URL used for building/pushing image targets.
 # Default tag is 'latest' to avoid unnecessary changes in checked-in manifests.
-# Override with a specific version when building release images (e.g., IMG=openshift.io/external-secrets-operator:v1.1.0).
+# Override with a specific version when building release images (e.g., IMG=openshift.io/external-secrets-operator:v1.2.0).
 IMG ?= openshift.io/external-secrets-operator:latest
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
@@ -92,6 +92,14 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= podman
 
+# Map the invoking host user into a container so bind-mount writes are owned
+# correctly (podman: keep-id; docker: numeric --user).
+ifeq ($(CONTAINER_TOOL),podman)
+CONTAINER_USER_FLAGS ?= --userns=keep-id
+else
+CONTAINER_USER_FLAGS ?= --user $(shell id -u):$(shell id -g)
+endif
+
 # GO_PACKAGE is the Go module path (used for ldflags to embed version info).
 GO_PACKAGE ?= github.com/openshift/external-secrets-operator
 
@@ -99,7 +107,7 @@ GO_PACKAGE ?= github.com/openshift/external-secrets-operator
 SOURCE_GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
 BUILD_DATE ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
-# Extract major/minor from IMG_VERSION (e.g., 1.1.0 -> major=1, minor=1)
+# Extract major/minor from IMG_VERSION (e.g., 1.2.0 -> major=1, minor=1)
 IMG_VERSION_MAJOR = $(word 1,$(subst ., ,$(IMG_VERSION)))
 IMG_VERSION_MINOR = $(word 2,$(subst ., ,$(IMG_VERSION)))
 
@@ -139,14 +147,29 @@ OPERATOR_SDK_VERSION ?= v1.39.0
 YQ_VERSION = v4.50.1
 HELM_VERSION ?= v3.17.3
 
-# Include the library makefiles
-include $(addprefix ./vendor/github.com/openshift/build-machinery-go/make/, \
-    targets/openshift/bindata.mk \
-    targets/openshift/yq.mk \
-)
+# Image tag produced by markdownlint-image; base image for that Dockerfile.
+MARKDOWNLINT_IMAGE ?= external-secrets-operator-markdownlint:latest
+MARKDOWNLINT_BASE_IMAGE ?= mirror.gcr.io/library/node@sha256:76789712cd1ae89a1225eac9077010d68987a423588042dac30446f502f1858c
 
-# generate bindata targets
+# Include the library makefiles only when vendored (so e.g. `make update-vendor` works on a clean tree).
+BUILD_MACHINERY_GO_MAKE := $(PROJECT_ROOT)/vendor/github.com/openshift/build-machinery-go/make
+
+ifneq (,$(wildcard $(BUILD_MACHINERY_GO_MAKE)/targets/openshift/bindata.mk))
+include $(BUILD_MACHINERY_GO_MAKE)/targets/openshift/bindata.mk
+# Generate bindata targets
 $(call add-bindata,assets,./bindata/...,bindata,assets,pkg/operator/assets/bindata.go)
+endif
+
+ifneq (,$(wildcard $(BUILD_MACHINERY_GO_MAKE)/targets/openshift/yq.mk))
+include $(BUILD_MACHINERY_GO_MAKE)/targets/openshift/yq.mk
+else
+# Vendored yq.mk defines ensure-yq; stub so the Makefile parses before the first `go work vendor`.
+.PHONY: ensure-yq
+ensure-yq:
+	@echo >&2 "Missing $(BUILD_MACHINERY_GO_MAKE)/targets/openshift/yq.mk"
+	@echo >&2 "Populate vendor first: make update-vendor"
+	@exit 1
+endif
 
 .PHONY: all
 all: build verify
@@ -202,8 +225,8 @@ test-unit: vet ## Run unit tests.
 # E2E_TIMEOUT is the timeout for e2e tests.
 E2E_TIMEOUT ?= 1h
 # E2E_GINKGO_LABEL_FILTER is ginkgo label query for selecting tests. See
-# https://onsi.github.io/ginkgo/#spec-labels. The default is to run tests on the AWS platform.
-E2E_GINKGO_LABEL_FILTER ?= "Platform: isSubsetOf {AWS}"
+# https://onsi.github.io/ginkgo/#spec-labels. Default runs Platform:AWS and Platform:Generic tests; excludes Feature:Proxy, Feature:Upgrade, and Provider:Bitwarden.
+E2E_GINKGO_LABEL_FILTER ?= Platform: isSubsetOf {AWS,Generic} && !(Feature: containsAny {Proxy, Upgrade}) && !(Provider: containsAny Bitwarden)
 .PHONY: test-e2e
 test-e2e: ## Run e2e tests against a cluster.
 	@echo "Running go e2e tests..."
@@ -214,7 +237,7 @@ test-e2e: ## Run e2e tests against a cluster.
 		-ginkgo.v \
 		-ginkgo.trace \
 		-ginkgo.show-node-events \
-		-ginkgo.label-filter=$(E2E_GINKGO_LABEL_FILTER)
+		-ginkgo.label-filter='$(E2E_GINKGO_LABEL_FILTER)'
 
 .PHONY: test-apis
 test-apis: $(ENVTEST) $(GINKGO) ## Run API integration tests.
@@ -230,6 +253,24 @@ lint: $(GOLANGCI_LINT) $(KUBE_API_LINT) ## Run golangci-lint linter.
 lint-fix: $(GOLANGCI_LINT) ## Run golangci-lint linter and perform fixes.
 	@echo "Running go linter with auto-fix..."
 	@$(GOLANGCI_LINT) run --verbose --fix --config .golangci.yml
+
+.PHONY: markdownlint-image
+markdownlint-image: ## Build MARKDOWNLINT_IMAGE from hack/Dockerfile.markdownlint.
+	@echo "Building markdownlint image $(MARKDOWNLINT_IMAGE)..."
+	@$(CONTAINER_TOOL) build \
+		--build-arg MARKDOWNLINT_BASE_IMAGE=$(MARKDOWNLINT_BASE_IMAGE) \
+		-f hack/Dockerfile.markdownlint \
+		-t $(MARKDOWNLINT_IMAGE) .
+
+.PHONY: lint-markdown
+lint-markdown: ## Run markdownlint-cli2 (config: .markdownlint-cli2.yaml).
+	@echo "Running markdownlint..."
+	@$(call run-markdownlint,)
+
+.PHONY: lint-markdown-fix
+lint-markdown-fix: ## Run markdownlint-cli2 --fix.
+	@echo "Running markdownlint with auto-fix..."
+	@$(call run-markdownlint,--fix)
 
 ##@ Build
 
@@ -359,6 +400,36 @@ go build -mod=vendor -o $${bin_path} $${package}; \
 }
 endef
 
+# run-markdownlint $(1)
+# $(1): args forwarded to markdownlint-cli2 (e.g. --fix).
+# Resolution order:
+#   1. markdownlint-cli2 on PATH -> hack/markdownlint.sh
+#   2. OPENSHIFT_CI=true and missing binary -> error
+#   3. else -> build MARKDOWNLINT_IMAGE and podman/docker run
+# --fix uses a writable mount and CONTAINER_USER_FLAGS; lint-only mounts :ro,Z.
+define run-markdownlint
+if command -v markdownlint-cli2 >/dev/null 2>&1; then \
+	./hack/markdownlint.sh $(1); \
+elif [ "$${OPENSHIFT_CI:-}" = "true" ]; then \
+	echo "markdownlint-cli2 not found on PATH (OPENSHIFT_CI=true)." >&2; \
+	exit 1; \
+else \
+	$(MAKE) markdownlint-image; \
+	if [ "$(1)" = "--fix" ]; then \
+		$(CONTAINER_TOOL) run --rm \
+			$(CONTAINER_USER_FLAGS) \
+			-v $(PROJECT_ROOT):/workdir:Z \
+			-w /workdir \
+			$(MARKDOWNLINT_IMAGE) $(1); \
+	else \
+		$(CONTAINER_TOOL) run --rm \
+			-v $(PROJECT_ROOT):/workdir:ro,Z \
+			-w /workdir \
+			$(MARKDOWNLINT_IMAGE) $(1); \
+	fi; \
+fi
+endef
+
 $(OPERATOR_SDK): ## Download operator-sdk locally if necessary.
 ifeq (,$(wildcard $(OPERATOR_SDK)))
 ifeq (,$(shell which operator-sdk 2>/dev/null))
@@ -449,7 +520,7 @@ catalog-push: ## Push a catalog image.
 ##@ Verification
 
 .PHONY: verify
-verify: vet fmt verify-deps verify-bindata verify-bindata-assets verify-generated govulncheck check-git-diff ## Verify the changes are working as expected.
+verify: vet fmt verify-deps verify-bindata verify-bindata-assets verify-generated govulncheck lint-markdown check-git-diff ## Verify the changes are working as expected.
 
 .PHONY: check-git-diff
 check-git-diff: update ## Check for any uncommitted changes including untracked files.

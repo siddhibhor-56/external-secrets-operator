@@ -1,0 +1,15 @@
+# Container image for markdownlint-cli2.
+# Built by `make markdownlint-image`; entrypoint is hack/markdownlint.sh.
+#
+# Override base:
+#   make markdownlint-image MARKDOWNLINT_BASE_IMAGE=mirror.gcr.io/library/node@sha256:<digest>
+ARG MARKDOWNLINT_BASE_IMAGE=mirror.gcr.io/library/node@sha256:76789712cd1ae89a1225eac9077010d68987a423588042dac30446f502f1858c
+FROM ${MARKDOWNLINT_BASE_IMAGE}
+
+WORKDIR /workdir
+COPY hack/install-markdownlint.sh /tmp/install-markdownlint.sh
+RUN chmod +x /tmp/install-markdownlint.sh && /tmp/install-markdownlint.sh
+
+COPY hack/markdownlint.sh /usr/local/bin/markdownlint.sh
+RUN chmod +x /usr/local/bin/markdownlint.sh
+ENTRYPOINT ["/usr/local/bin/markdownlint.sh"]

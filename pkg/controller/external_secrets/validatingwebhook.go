@@ -16,35 +16,42 @@ func (r *Reconciler) createOrApplyValidatingWebhookConfiguration(esc *operatorv1
 	desiredWebhooks := r.getValidatingWebhookObjects(esc, resourceMetadata)
 
 	for _, desired := range desiredWebhooks {
-		validatingWebhookName := desired.GetName()
-		r.log.V(4).Info("reconciling validatingWebhook resource", "name", validatingWebhookName)
-		fetched := &webhook.ValidatingWebhookConfiguration{}
-		exist, err := r.Exists(r.ctx, client.ObjectKeyFromObject(desired), fetched)
-		if err != nil {
-			return common.FromClientError(err, "failed to check %s validatingWebhook resource already exists", validatingWebhookName)
-		}
-
-		if exist && recon {
-			r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s validatingWebhook resource already exists, maybe from previous installation", validatingWebhookName)
-		}
-		if exist && common.HasObjectChanged(desired, fetched, &resourceMetadata) {
-			r.log.V(1).Info("validatingWebhook has been modified", "updating to desired state", "name", validatingWebhookName)
-			common.RemoveObsoleteAnnotations(desired, resourceMetadata)
-			if err := r.UpdateWithRetry(r.ctx, desired); err != nil {
-				return common.FromClientError(err, "failed to update %s validatingWebhook resource with desired state", validatingWebhookName)
-			}
-			r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "validatingWebhook resource %s reconciled back to desired state", validatingWebhookName)
-		} else {
-			r.log.V(4).Info("validatingWebhook resource already exists and is in expected state", "name", validatingWebhookName)
-		}
-
-		if !exist {
-			if err := r.Create(r.ctx, desired); err != nil {
-				return common.FromClientError(err, "failed to create validatingWebhook resource %s", validatingWebhookName)
-			}
-			r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "validatingWebhook resource %s created", validatingWebhookName)
+		if err := r.createOrApplyValidatingWebhook(esc, desired, resourceMetadata, recon); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (r *Reconciler) createOrApplyValidatingWebhook(esc *operatorv1alpha1.ExternalSecretsConfig, desired *webhook.ValidatingWebhookConfiguration, resourceMetadata common.ResourceMetadata, recon bool) error {
+	validatingWebhookName := desired.GetName()
+	r.log.V(4).Info("reconciling validatingWebhook resource", "name", validatingWebhookName)
+	fetched := &webhook.ValidatingWebhookConfiguration{}
+	exist, err := r.Exists(r.ctx, client.ObjectKeyFromObject(desired), fetched)
+	if err != nil {
+		return common.FromClientError(err, "failed to check %s validatingWebhook resource already exists", validatingWebhookName)
+	}
+
+	if !exist {
+		return r.createWithFallback(desired, resourceMetadata, validatingWebhookName, esc)
+	}
+
+	if recon {
+		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s validatingWebhook resource already exists, maybe from previous installation", validatingWebhookName)
+	}
+
+	if !common.HasObjectChanged(desired, fetched, &resourceMetadata) {
+		r.log.V(4).Info("validatingWebhook resource already exists and is in expected state", "name", validatingWebhookName)
+		return nil
+	}
+
+	r.log.V(1).Info("validatingWebhook has been modified", "updating to desired state", "name", validatingWebhookName)
+	common.RemoveObsoleteAnnotations(desired, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, desired); err != nil {
+		return common.FromClientError(err, "failed to update %s validatingWebhook resource with desired state", validatingWebhookName)
+	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "validatingWebhook resource %s reconciled back to desired state", validatingWebhookName)
+
 	return nil
 }
 

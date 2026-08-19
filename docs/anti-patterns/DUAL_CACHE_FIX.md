@@ -11,12 +11,14 @@ The external-secrets-operator controller was using **two separate caches**:
 2. **Custom cache** - For reading objects during reconciliation
 
 This created a race condition:
-```
+
+```text
 OLD (Race Condition):
 Manager cache syncs → triggers reconcile → reads from different custom cache → might not be synced yet
 ```
 
 ### Consequences
+
 - Potential "object not found" errors despite object existing
 - Race condition during startup
 - Unnecessary memory and network overhead (both caches watching same resources)
@@ -26,18 +28,19 @@ Manager cache syncs → triggers reconcile → reads from different custom cache
 
 Replaced the dual-cache pattern with a **single unified cache**:
 
-```
+```text
 NEW (No Race):
 Manager cache syncs → triggers reconcile → reads from SAME manager cache → guaranteed synced
 ```
 
 ### Changes Made
 
-####1. Configure Manager Cache with Label Selectors
+#### 1. Configure Manager Cache with Label Selectors
 
 **File:** `cmd/external-secrets-operator/main.go`
 
 Added `NewCache` option to manager configuration:
+
 ```go
 mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
     // ... existing options ...
@@ -71,6 +74,7 @@ func NewCacheBuilder() cache.NewCacheFunc {
 #### 3. Simplified Client Creation
 
 **Before:**
+
 ```go
 func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, error) {
     c, err := BuildCustomClient(m, r)  // Created separate custom cache
@@ -82,6 +86,7 @@ func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, err
 ```
 
 **After:**
+
 ```go
 func NewClient(m manager.Manager, r *Reconciler) (operatorclient.CtrlClient, error) {
     // Use the manager's client directly - it reads from the manager's cache
@@ -123,22 +128,26 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
 ## Benefits
 
 ### 1. Eliminates Race Condition ✅
+
 - Controller-runtime guarantees cache sync before reconciliation starts
 - No more potential for reading from an unsynced cache
 - Deterministic behavior
 
 ### 2. Reduces Resource Usage ✅
+
 - **Before:** 2 caches × N resources = 2N watch connections + 2N cached objects
 - **After:** 1 cache × N resources = N watch connections + N cached objects
 - **Memory saved:** ~50%
 - **Network traffic saved:** ~50%
 
 ### 3. Simplifies Code ✅
+
 - Removed ~100 lines of custom cache management code
 - Clearer control flow: one cache, one source of truth
 - Easier to understand and maintain
 
 ### 4. Follows Best Practices ✅
+
 - Uses standard controller-runtime pattern
 - Same solution as cert-manager-operator ([PR #324](https://github.com/openshift/cert-manager-operator/pull/324))
 - Leverages controller-runtime's built-in cache synchronization guarantees
@@ -146,7 +155,8 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
 ## Architecture Comparison
 
 ### Before (Dual Cache)
-```
+
+```text
 ┌──────────────────────────────────────────┐
 │          Kubernetes API Server            │
 └────────────┬─────────────────┬───────────┘
@@ -171,7 +181,8 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
 ```
 
 ### After (Unified Cache)
-```
+
+```text
 ┌──────────────────────────────────────────┐
 │          Kubernetes API Server            │
 └────────────┬─────────────────────────────┘
@@ -200,11 +211,13 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
 ### Verification Steps
 
 1. **Build the operator:**
+
    ```bash
    make build
    ```
 
 2. **Deploy and observe:**
+
    ```bash
    # Check cache initialization logs
    kubectl logs -n external-secrets-operator deployment/external-secrets-operator-controller-manager | grep "cache-setup"
@@ -214,6 +227,7 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
    ```
 
 3. **Test reconciliation:**
+
    ```bash
    # Create/update ExternalSecretsConfig
    kubectl apply -f config/samples/operator_v1alpha1_externalsecretsconfig.yaml
@@ -232,9 +246,11 @@ Deleted the entire `BuildCustomClient()` function and its associated logic (~100
 ## Migration Notes
 
 ### Breaking Changes
+
 **None.** This is an internal implementation change with no API changes.
 
 ### Rollback
+
 If issues occur, revert this commit to restore the dual-cache implementation.
 
 ## References
@@ -247,4 +263,3 @@ If issues occur, revert this commit to restore the dual-cache implementation.
 ## Credits
 
 Solution inspired by the fix implemented in cert-manager-operator by the OpenShift cert-manager team for a similar race condition in the istio-csr controller.
-

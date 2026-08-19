@@ -61,6 +61,17 @@ type ExternalSecretsManagerSpec struct {
 	// globalConfig is for configuring the behavior of deployments that are managed by external secrets-operator.
 	// +optional
 	GlobalConfig *GlobalConfig `json:"globalConfig,omitempty"`
+
+	// features configures optional capabilities across deployments managed by the external-secrets-operator,
+	// including the operator itself and any current or future operands.
+	// Each entry is uniquely identified by name and can be individually enabled or disabled.
+	// This field can have a maximum of 1 entry.
+	// +kubebuilder:validation:MinItems:=0
+	// +kubebuilder:validation:MaxItems:=1
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Features []Feature `json:"features,omitempty"`
 }
 
 // GlobalConfig is for configuring the external-secrets-operator behavior.
@@ -74,6 +85,26 @@ type GlobalConfig struct {
 	// +kubebuilder:validation:MaxProperties:=20
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// Feature configures an optional capability that is applied by the external-secrets-operator across its managed deployments.
+type Feature struct {
+	// name identifies the optional feature to configure.
+	// Currently, the only supported value is UnsafeAllowGenericTargets.
+	// +kubebuilder:validation:Enum:=UnsafeAllowGenericTargets
+	// +required
+	//nolint:kubeapilinter // Name is a listMapKey and must not have omitempty for proper patch identification
+	Name FeatureName `json:"name"`
+
+	// mode controls whether the feature is active.
+	// When set to Enabled, the operator applies the configuration associated with the named feature to the relevant managed deployments.
+	// For UnsafeAllowGenericTargets, this passes the `--unsafe-allow-generic-targets` flag to the external-secrets core controller,
+	// allowing ExternalSecret resources to target Kubernetes resources other than Secrets (for example, ConfigMaps or custom resources).
+	// Warning: Generic targets require additional RBAC permissions on the affected operand; enabling this feature without the appropriate permissions will cause reconciliation failures.
+	// +kubebuilder:validation:Enum:=Enabled;Disabled
+	// +kubebuilder:default:=Disabled
+	// +optional
+	Mode Mode `json:"mode,omitempty"`
 }
 
 // ExternalSecretsManagerStatus is the most recently observed status of the ExternalSecretsManager.

@@ -124,7 +124,7 @@ func TestCreateOrApplyRBACResource(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: `failed to create external-secrets-cert-controller clusterrolebinding resource: test client error`,
+			wantErr: `failed to create ClusterRoleBinding external-secrets-cert-controller: test client error`,
 		},
 		{
 			name: "clusterrole reconciliation updating to desired state fails",
@@ -164,7 +164,7 @@ func TestCreateOrApplyRBACResource(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: `failed to create external-secrets-cert-controller clusterrole resource: test client error`,
+			wantErr: `failed to create ClusterRole external-secrets-cert-controller: test client error`,
 		},
 		{
 			name: "role reconciliation updating to desired state fails",
@@ -202,7 +202,7 @@ func TestCreateOrApplyRBACResource(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: `failed to create external-secrets/external-secrets-leaderelection role resource: test client error`,
+			wantErr: `failed to create Role external-secrets/external-secrets-leaderelection: test client error`,
 		},
 		{
 			name: "rolebindings reconciliation updating to desired state fails",
@@ -240,7 +240,7 @@ func TestCreateOrApplyRBACResource(t *testing.T) {
 					return nil
 				})
 			},
-			wantErr: `failed to create external-secrets/external-secrets-leaderelection rolebinding resource: test client error`,
+			wantErr: `failed to create RoleBinding external-secrets/external-secrets-leaderelection: test client error`,
 		},
 		{
 			name: "clusterroles creation successful",

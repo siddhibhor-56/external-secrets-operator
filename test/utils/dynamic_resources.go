@@ -21,6 +21,7 @@ package utils
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -69,13 +70,18 @@ func (d DynamicResourceLoader) DeleteFromFile(assetFunc func(name string) ([]byt
 }
 
 func (d DynamicResourceLoader) CreateFromFile(assetFunc func(name string) ([]byte, error), filename string, overrideNamespace string) {
+	d.CreateFromFileWithReplacements(assetFunc, filename, overrideNamespace, nil)
+}
+
+// CreateFromFileWithReplacements creates a resource from a file with template variable replacements
+func (d DynamicResourceLoader) CreateFromFileWithReplacements(assetFunc func(name string) ([]byte, error), filename string, overrideNamespace string, replacements map[string]string) {
 	d.t.Logf("Creating resource %v\n", filename)
 	createFunc := func(t *testing.T, unstructured *unstructured.Unstructured, dynamicResourceInterface dynamic.ResourceInterface) {
 		_, err := dynamicResourceInterface.Create(d.context, unstructured, metav1.CreateOptions{})
 		d.noErrorSkipExists(err)
 	}
 
-	d.do(createFunc, assetFunc, filename, overrideNamespace)
+	d.doWithReplacements(createFunc, assetFunc, filename, overrideNamespace, replacements)
 	d.t.Logf("Resource %v created\n", filename)
 }
 
@@ -139,8 +145,21 @@ func (d DynamicResourceLoader) noErrorSkipNotExisting(err error) {
 }
 
 func (d DynamicResourceLoader) do(do doFunc, assetFunc func(name string) ([]byte, error), filename string, overrideNamespace string) {
+	d.doWithReplacements(do, assetFunc, filename, overrideNamespace, nil)
+}
+
+func (d DynamicResourceLoader) doWithReplacements(do doFunc, assetFunc func(name string) ([]byte, error), filename string, overrideNamespace string, replacements map[string]string) {
 	b, err := assetFunc(filename)
 	require.NoError(d.t, err)
+
+	// Apply string replacements if provided
+	if len(replacements) > 0 {
+		content := string(b)
+		for placeholder, value := range replacements {
+			content = strings.ReplaceAll(content, placeholder, value)
+		}
+		b = []byte(content)
+	}
 
 	decoder := yamlutil.NewYAMLOrJSONDecoder(bytes.NewReader(b), 1024)
 	var rawObj runtime.RawExtension

@@ -159,6 +159,14 @@ type ControllerConfig struct {
 	// +listMapKey=componentName
 	// +optional
 	ComponentConfigs []ComponentConfig `json:"componentConfigs,omitempty"`
+
+	// trustedCABundle references a ConfigMap containing PEM-encoded CA certificates for the external-secrets core controller to trust when making outbound TLS connections.
+	// If specified, this bundle is used for all outbound TLS traffic, including connections to external secret management systems and configured proxies.
+	// The ConfigMap must exist in the external-secrets operand namespace and must not carry the CNO inject-trusted-cabundle label when proxy is configured.
+	// When omitted, external providers use standard system certificates. When proxy is configured, proxy TLS connections use the operator-managed
+	// OpenShift trusted CA bundle injected by the Cluster Network Operator.
+	// +optional
+	TrustedCABundle *ConfigMapKeyReference `json:"trustedCABundle,omitempty"`
 }
 
 // ComponentConfig defines configuration overrides for a specific external-secrets component.
@@ -175,9 +183,10 @@ type ComponentConfig struct {
 	DeploymentConfigs *DeploymentConfig `json:"deploymentConfigs,omitempty"`
 
 	// overrideEnv specifies custom environment variables for this component's container. These are merged with operator-managed environment variables, with user-defined values taking precedence.
-	// Keys starting with 'HOSTNAME', 'KUBERNETES_', or 'EXTERNAL_SECRETS_' are reserved and will be rejected.
+	// Names starting with 'KUBERNETES_' or 'EXTERNAL_SECRETS_' are reserved prefixes and will be rejected.
+	// The exact names 'HOSTNAME', 'SSL_CERT_DIR', and 'SSL_CERT_FILE' are also reserved.
 	// +kubebuilder:validation:MaxItems:=50
-	// +kubebuilder:validation:XValidation:rule="self.all(e, !['HOSTNAME', 'KUBERNETES_', 'EXTERNAL_SECRETS_'].exists(p, e.name.startsWith(p)))",message="Environment variable names with reserved prefixes 'HOSTNAME', 'KUBERNETES_', 'EXTERNAL_SECRETS_' are not allowed"
+	// +kubebuilder:validation:XValidation:rule="self.all(e, !['KUBERNETES_', 'EXTERNAL_SECRETS_'].exists(p, e.name.startsWith(p)) && e.name != 'HOSTNAME' && e.name != 'SSL_CERT_DIR' && e.name != 'SSL_CERT_FILE')",message="Environment variable names 'HOSTNAME', 'SSL_CERT_DIR', and 'SSL_CERT_FILE' are reserved, along with any names that start with 'KUBERNETES_' or 'EXTERNAL_SECRETS_'."
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -303,8 +312,9 @@ type NetworkPolicy struct {
 	// Name is the logical identifier for this network policy entry.
 	// The operator prepends "eso-user-" to this value when creating the Kubernetes
 	// NetworkPolicy object (e.g. "allow-egress" becomes "eso-user-allow-egress").
+	// Maximum length is 243 to accommodate the prefix within the 253-character Kubernetes name limit.
 	// +kubebuilder:validation:MinLength:=1
-	// +kubebuilder:validation:MaxLength:=253
+	// +kubebuilder:validation:MaxLength:=243
 	// +required
 	//nolint:kubeapilinter // Name is a listMapKey and must not have omitempty for proper patch identification
 	Name string `json:"name"`

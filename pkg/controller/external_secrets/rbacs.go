@@ -111,25 +111,25 @@ func (r *Reconciler) createOrApplyClusterRole(esc *operatorv1alpha1.ExternalSecr
 		return common.FromClientError(err, "failed to check %s clusterrole resource already exists", clusterRoleName)
 	}
 
-	if exist && recon {
+	if !exist {
+		return r.createWithFallback(obj, resourceMetadata, clusterRoleName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s clusterrole resource already exists, maybe from previous installation", clusterRoleName)
 	}
-	if exist && common.HasObjectChanged(obj, fetched, &resourceMetadata) {
-		r.log.V(1).Info("clusterrole has been modified, updating to desired state", "name", clusterRoleName)
-		common.RemoveObsoleteAnnotations(obj, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to update %s clusterrole resource", clusterRoleName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrole resource %s reconciled back to desired state", clusterRoleName)
-	} else {
+
+	if !common.HasObjectChanged(obj, fetched, &resourceMetadata) {
 		r.log.V(4).Info("clusterrole resource already exists and is in expected state", "name", clusterRoleName)
+		return nil
 	}
-	if !exist {
-		if err := r.Create(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to create %s clusterrole resource", clusterRoleName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrole resource %s created", clusterRoleName)
+
+	r.log.V(1).Info("clusterrole has been modified, updating to desired state", "name", clusterRoleName)
+	common.RemoveObsoleteAnnotations(obj, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
+		return common.FromClientError(err, "failed to update %s clusterrole resource", clusterRoleName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrole resource %s reconciled back to desired state", clusterRoleName)
 
 	return nil
 }
@@ -157,25 +157,25 @@ func (r *Reconciler) createOrApplyClusterRoleBinding(esc *operatorv1alpha1.Exter
 		return common.FromClientError(err, "failed to check %s clusterrolebinding resource already exists", clusterRoleBindingName)
 	}
 
-	if exist && recon {
+	if !exist {
+		return r.createWithFallback(obj, resourceMetadata, clusterRoleBindingName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s clusterrolebinding resource already exists, maybe from previous installation", clusterRoleBindingName)
 	}
-	if exist && common.HasObjectChanged(obj, fetched, &resourceMetadata) {
-		r.log.V(1).Info("clusterrolebinding has been modified, updating to desired state", "name", clusterRoleBindingName)
-		common.RemoveObsoleteAnnotations(obj, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to update %s clusterrolebinding resource", clusterRoleBindingName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrolebinding resource %s reconciled back to desired state", clusterRoleBindingName)
-	} else {
+
+	if !common.HasObjectChanged(obj, fetched, &resourceMetadata) {
 		r.log.V(4).Info("clusterrolebinding resource already exists and is in expected state", "name", clusterRoleBindingName)
+		return nil
 	}
-	if !exist {
-		if err := r.Create(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to create %s clusterrolebinding resource", clusterRoleBindingName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrolebinding resource %s created", clusterRoleBindingName)
+
+	r.log.V(1).Info("clusterrolebinding has been modified, updating to desired state", "name", clusterRoleBindingName)
+	common.RemoveObsoleteAnnotations(obj, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
+		return common.FromClientError(err, "failed to update %s clusterrolebinding resource", clusterRoleBindingName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "clusterrolebinding resource %s reconciled back to desired state", clusterRoleBindingName)
 
 	return nil
 }
@@ -201,25 +201,25 @@ func (r *Reconciler) createOrApplyRole(esc *operatorv1alpha1.ExternalSecretsConf
 		return common.FromClientError(err, "failed to check %s role resource already exists", roleName)
 	}
 
-	if exist && recon {
+	if !exist {
+		return r.createWithFallback(obj, resourceMetadata, roleName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s role resource already exists, maybe from previous installation", roleName)
 	}
-	if exist && common.HasObjectChanged(obj, fetched, &resourceMetadata) {
-		r.log.V(1).Info("role has been modified, updating to desired state", "name", roleName)
-		common.RemoveObsoleteAnnotations(obj, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to update %s role resource", roleName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "role resource %s reconciled back to desired state", roleName)
-	} else {
+
+	if !common.HasObjectChanged(obj, fetched, &resourceMetadata) {
 		r.log.V(4).Info("role resource already exists and is in expected state", "name", roleName)
+		return nil
 	}
-	if !exist {
-		if err := r.Create(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to create %s role resource", roleName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "role resource %s created", roleName)
+
+	r.log.V(1).Info("role has been modified, updating to desired state", "name", roleName)
+	common.RemoveObsoleteAnnotations(obj, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
+		return common.FromClientError(err, "failed to update %s role resource", roleName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "role resource %s reconciled back to desired state", roleName)
 
 	return nil
 }
@@ -244,25 +244,25 @@ func (r *Reconciler) createOrApplyRoleBinding(esc *operatorv1alpha1.ExternalSecr
 		return common.FromClientError(err, "failed to check %s rolebinding resource already exists", roleBindingName)
 	}
 
-	if exist && recon {
+	if !exist {
+		return r.createWithFallback(obj, resourceMetadata, roleBindingName, esc)
+	}
+
+	if recon {
 		r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "%s rolebinding resource already exists, maybe from previous installation", roleBindingName)
 	}
-	if exist && common.HasObjectChanged(obj, fetched, &resourceMetadata) {
-		r.log.V(1).Info("rolebinding has been modified, updating to desired state", "name", roleBindingName)
-		common.RemoveObsoleteAnnotations(obj, resourceMetadata)
-		if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to update %s rolebinding resource", roleBindingName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "rolebinding resource %s reconciled back to desired state", roleBindingName)
-	} else {
+
+	if !common.HasObjectChanged(obj, fetched, &resourceMetadata) {
 		r.log.V(4).Info("rolebinding resource already exists and is in expected state", "name", roleBindingName)
+		return nil
 	}
-	if !exist {
-		if err := r.Create(r.ctx, obj); err != nil {
-			return common.FromClientError(err, "failed to create %s rolebinding resource", roleBindingName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "rolebinding resource %s created", roleBindingName)
+
+	r.log.V(1).Info("rolebinding has been modified, updating to desired state", "name", roleBindingName)
+	common.RemoveObsoleteAnnotations(obj, resourceMetadata)
+	if err := r.UpdateWithRetry(r.ctx, obj); err != nil {
+		return common.FromClientError(err, "failed to update %s rolebinding resource", roleBindingName)
 	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "rolebinding resource %s reconciled back to desired state", roleBindingName)
 
 	return nil
 }
