@@ -71,10 +71,9 @@ func (r *Reconciler) createOrApplyCertificate(esc *operatorv1alpha1.ExternalSecr
 		r.log.V(4).Info("certificate resource already exists and is in expected state", "name", certificateName)
 	}
 	if !exist {
-		if err := r.Create(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to create %s certificate resource", certificateName)
+		if err := r.createWithFallback(esc, desired, fmt.Sprintf("%s certificate resource", certificateName)); err != nil {
+			return err
 		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "certificate resource %s created", certificateName)
 	}
 
 	return nil

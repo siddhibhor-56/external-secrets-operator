@@ -1,6 +1,7 @@
 package external_secrets
 
 import (
+	"fmt"
 	"maps"
 
 	webhook "k8s.io/api/admissionregistration/v1"
@@ -39,10 +40,9 @@ func (r *Reconciler) createOrApplyValidatingWebhookConfiguration(esc *operatorv1
 		}
 
 		if !exist {
-			if err := r.Create(r.ctx, desired); err != nil {
-				return common.FromClientError(err, "failed to create validatingWebhook resource %s", validatingWebhookName)
+			if err := r.createWithFallback(esc, desired, fmt.Sprintf("validatingWebhook resource %s", validatingWebhookName)); err != nil {
+				return err
 			}
-			r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "validatingWebhook resource %s created", validatingWebhookName)
 		}
 	}
 	return nil

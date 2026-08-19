@@ -5,6 +5,7 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -57,9 +58,18 @@ func (r *Reconciler) ensureTrustedCABundleConfigMap(esc *operatorv1alpha1.Extern
 	}
 
 	if !exist {
-		// Create the ConfigMap
 		if err := r.Create(r.ctx, desiredConfigMap); err != nil {
-			return common.FromClientError(err, "failed to create %s trusted CA bundle ConfigMap resource", configMapName)
+			if !apierrors.IsAlreadyExists(err) {
+				return common.FromClientError(err, "failed to create %s trusted CA bundle ConfigMap resource", configMapName)
+			}
+			r.log.V(1).Info("trusted CA bundle ConfigMap already exists but missing from cache, patching metadata via uncached client",
+				"name", configMapName)
+			if err := r.patchResourceMetadata(desiredConfigMap); err != nil {
+				return common.FromClientError(err, "failed to patch metadata on %s trusted CA bundle ConfigMap resource", configMapName)
+			}
+			r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled",
+				"trusted CA bundle ConfigMap resource %s metadata restored (was missing from cache)", configMapName)
+			return nil
 		}
 		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "trusted CA bundle ConfigMap resource %s created", configMapName)
 		return nil

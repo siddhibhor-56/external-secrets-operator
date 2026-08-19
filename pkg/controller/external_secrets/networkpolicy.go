@@ -144,10 +144,9 @@ func (r *Reconciler) createOrApplyCustomNetworkPolicy(esc *operatorv1alpha1.Exte
 		}
 		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s updated", networkPolicyName)
 	case !exists:
-		if err := r.Create(r.ctx, networkPolicy); err != nil {
-			return common.FromClientError(err, "failed to create network policy %s", networkPolicyName)
+		if err := r.createWithFallback(esc, networkPolicy, fmt.Sprintf("network policy %s", networkPolicyName)); err != nil {
+			return err
 		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s created", networkPolicyName)
 	default:
 		r.log.V(4).Info("NetworkPolicy already up-to-date", "name", networkPolicyName)
 	}
@@ -183,10 +182,9 @@ func (r *Reconciler) createOrApplyNetworkPolicyFromAsset(esc *operatorv1alpha1.E
 		}
 		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s updated", networkPolicyName)
 	case !exists:
-		if err := r.Create(r.ctx, networkPolicy); err != nil {
-			return common.FromClientError(err, "failed to create network policy %s", networkPolicyName)
+		if err := r.createWithFallback(esc, networkPolicy, fmt.Sprintf("network policy %s", networkPolicyName)); err != nil {
+			return err
 		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "NetworkPolicy %s created", networkPolicyName)
 	default:
 		r.log.V(4).Info("NetworkPolicy already up-to-date", "name", networkPolicyName)
 	}
@@ -288,12 +286,8 @@ func (r *Reconciler) reconcileProxyEgressPolicy(esc *operatorv1alpha1.ExternalSe
 		}
 		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "proxy egress NetworkPolicy %s updated", npName)
 	case !exists:
-		if err := r.Create(r.ctx, np); err != nil {
-			return common.FromClientError(err, "failed to create proxy egress network policy %s", npName)
-		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "proxy egress NetworkPolicy %s created", npName)
-		if recon {
-			r.eventRecorder.Eventf(esc, corev1.EventTypeWarning, "ResourceAlreadyExists", "proxy egress NetworkPolicy %s already exists", npName)
+		if err := r.createWithFallback(esc, np, fmt.Sprintf("proxy egress network policy %s", npName)); err != nil {
+			return err
 		}
 	default:
 		r.log.V(4).Info("proxy egress NetworkPolicy already up-to-date", "name", npName)
