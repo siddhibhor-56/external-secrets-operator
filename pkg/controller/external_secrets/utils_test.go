@@ -507,3 +507,88 @@ func TestLabelMatchPredicateUpdate(t *testing.T) {
 		})
 	}
 }
+
+func TestLabelMatchPredicateCreateDeleteGeneric(t *testing.T) {
+	t.Parallel()
+
+	watchLabels := map[string]string{WatchedResourceLabelKey: WatchedResourceLabelValue}
+	managedLabels := map[string]string{ManagedResourceLabelKey: ManagedResourceLabelValue}
+	bothLabels := map[string]string{
+		ManagedResourceLabelKey: ManagedResourceLabelValue,
+		WatchedResourceLabelKey: WatchedResourceLabelValue,
+	}
+	unrelatedLabels := map[string]string{"foo": "bar"}
+
+	tests := []struct {
+		name               string
+		labels             map[string]string
+		wantManaged        bool
+		wantManagedOrWatch bool
+	}{
+		{
+			name:               "managed label",
+			labels:             managedLabels,
+			wantManaged:        true,
+			wantManagedOrWatch: true,
+		},
+		{
+			name:               "watched label",
+			labels:             watchLabels,
+			wantManaged:        false,
+			wantManagedOrWatch: true,
+		},
+		{
+			name:               "both labels",
+			labels:             bothLabels,
+			wantManaged:        true,
+			wantManagedOrWatch: true,
+		},
+		{
+			name:               "unrelated labels",
+			labels:             unrelatedLabels,
+			wantManaged:        false,
+			wantManagedOrWatch: false,
+		},
+		{
+			name:               "nil labels",
+			labels:             nil,
+			wantManaged:        false,
+			wantManagedOrWatch: false,
+		},
+	}
+
+	managedPred := labelMatchPredicate(isManagedResource)
+	managedOrWatchedPred := labelMatchPredicate(isManagedOrWatchedResource)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			obj := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels}}
+
+			createEvt := event.CreateEvent{Object: obj}
+			if got := managedPred.Create(createEvt); got != tt.wantManaged {
+				t.Fatalf("managed Create() = %v, want %v", got, tt.wantManaged)
+			}
+			if got := managedOrWatchedPred.Create(createEvt); got != tt.wantManagedOrWatch {
+				t.Fatalf("managedOrWatched Create() = %v, want %v", got, tt.wantManagedOrWatch)
+			}
+
+			deleteEvt := event.DeleteEvent{Object: obj}
+			if got := managedPred.Delete(deleteEvt); got != tt.wantManaged {
+				t.Fatalf("managed Delete() = %v, want %v", got, tt.wantManaged)
+			}
+			if got := managedOrWatchedPred.Delete(deleteEvt); got != tt.wantManagedOrWatch {
+				t.Fatalf("managedOrWatched Delete() = %v, want %v", got, tt.wantManagedOrWatch)
+			}
+
+			genericEvt := event.GenericEvent{Object: obj}
+			if got := managedPred.Generic(genericEvt); got != tt.wantManaged {
+				t.Fatalf("managed Generic() = %v, want %v", got, tt.wantManaged)
+			}
+			if got := managedOrWatchedPred.Generic(genericEvt); got != tt.wantManagedOrWatch {
+				t.Fatalf("managedOrWatched Generic() = %v, want %v", got, tt.wantManagedOrWatch)
+			}
+		})
+	}
+}
