@@ -273,10 +273,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []reconcile.Request{}
 	}
 
-	// predicate function to ignore events for objects not managed by controller.
-	managedResources := predicate.NewPredicateFuncs(func(object client.Object) bool {
-		return object.GetLabels() != nil && object.GetLabels()[requestEnqueueLabelKey] == requestEnqueueLabelValue
-	})
+	managedResources := labelMatchPredicate()
 
 	withIgnoreStatusUpdatePredicates := builder.WithPredicates(predicate.GenerationChangedPredicate{}, managedResources)
 	managedResourcePredicate := builder.WithPredicates(managedResources)

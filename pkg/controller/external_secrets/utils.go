@@ -2,13 +2,18 @@ package external_secrets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.uber.org/zap/zapcore"
 
@@ -202,4 +207,108 @@ func validateProxy(rawURL string) error {
 	}
 
 	return nil
+}
+
+// createWithFallback creates the desired resource. If the API server returns
+// AlreadyExists (because the resource exists but is invisible to the label-
+// filtered cache), it bypasses the cache via UncachedClient and performs a
+// full UpdateWithRetry to restore labels, annotations, and spec to the
+// desired state. This handles the scenario where an external actor removes
+// or modifies the managed "app=external-secrets" label.
+func (r *Reconciler) createWithFallback(
+	esc *operatorv1alpha1.ExternalSecretsConfig,
+	desired client.Object,
+	resourceDesc string,
+) error {
+	if err := r.Create(r.ctx, desired); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return common.FromClientError(err, "failed to create %s", resourceDesc)
+		}
+		r.log.V(1).Info("resource already exists but missing from cache, restoring to desired state via uncached client",
+			"resource", resourceDesc)
+		if err := r.UncachedClient.UpdateWithRetry(r.ctx, desired); err != nil {
+			return common.FromClientError(err, "failed to restore %s to desired state", resourceDesc)
+		}
+		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled",
+			"%s restored to desired state (was missing from cache)", resourceDesc)
+		return nil
+	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "%s created", resourceDesc)
+	return nil
+}
+
+// createWithMetadataFallback creates the desired resource. If the API server
+// returns AlreadyExists, it patches only metadata (labels and annotations) via
+// patchResourceMetadata, leaving data fields untouched. Use this for resources
+// where data is managed by an external controller (e.g. Secrets with TLS data
+// managed by the cert-controller).
+func (r *Reconciler) createWithMetadataFallback(
+	esc *operatorv1alpha1.ExternalSecretsConfig,
+	desired client.Object,
+	resourceDesc string,
+) error {
+	if err := r.Create(r.ctx, desired); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return common.FromClientError(err, "failed to create %s", resourceDesc)
+		}
+		r.log.V(1).Info("resource already exists but missing from cache, patching metadata via uncached client",
+			"resource", resourceDesc)
+		if err := r.patchResourceMetadata(desired); err != nil {
+			return common.FromClientError(err, "failed to patch metadata on %s", resourceDesc)
+		}
+		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled",
+			"%s metadata restored (was missing from cache)", resourceDesc)
+		return nil
+	}
+	r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "%s created", resourceDesc)
+	return nil
+}
+
+// patchResourceMetadata uses a JSON Merge Patch via the uncached client to
+// replace only labels and annotations on a resource without touching spec or
+// data fields. This is safe for co-managed resources where the operator owns
+// metadata but another controller owns the payload.
+func (r *Reconciler) patchResourceMetadata(desired client.Object) error {
+	patchBody := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"labels":      desired.GetLabels(),
+			"annotations": desired.GetAnnotations(),
+		},
+	}
+	patchBytes, err := json.Marshal(patchBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata patch: %w", err)
+	}
+	return r.UncachedClient.Patch(
+		r.ctx,
+		desired,
+		client.RawPatch(client.MergeFrom(desired).Type(), patchBytes),
+		client.FieldOwner(common.ExternalSecretsOperatorCommonName),
+	)
+}
+
+// labelMatchPredicate returns a predicate that matches resources carrying
+// the operator's managed label. On Update events it checks both the old and
+// new object so that reconciliation still triggers when an external actor
+// removes the managed label (the old object still matches even though the
+// new object does not).
+func labelMatchPredicate() predicate.Predicate {
+	hasLabel := func(obj client.Object) bool {
+		return obj.GetLabels() != nil &&
+			obj.GetLabels()[requestEnqueueLabelKey] == requestEnqueueLabelValue
+	}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return hasLabel(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return hasLabel(e.ObjectOld) || hasLabel(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return hasLabel(e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return hasLabel(e.Object)
+		},
+	}
 }

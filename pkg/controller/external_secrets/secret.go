@@ -44,10 +44,9 @@ func (r *Reconciler) createOrApplySecret(esc *operatorv1alpha1.ExternalSecretsCo
 	}
 
 	if !exist {
-		if err := r.Create(r.ctx, desired); err != nil {
-			return common.FromClientError(err, "failed to create %s secret resource", secretName)
+		if err := r.createWithMetadataFallback(esc, desired, fmt.Sprintf("%s secret resource", secretName)); err != nil {
+			return err
 		}
-		r.eventRecorder.Eventf(esc, corev1.EventTypeNormal, "Reconciled", "secret resource %s created", secretName)
 	}
 	return nil
 }
