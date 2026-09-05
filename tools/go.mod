@@ -1,6 +1,6 @@
 module github.com/openshift/external-secrets-operator/tools
 
-go 1.26.0
+go 1.26.6
 
 require (
 	github.com/elastic/crd-ref-docs v0.1.0
