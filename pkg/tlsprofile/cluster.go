@@ -10,11 +10,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	configv1 "github.com/openshift/api/config/v1"
-	libgocrypto "github.com/openshift/library-go/pkg/crypto"
 )
 
 // APIServerClusterName is the singleton apiserver.config.openshift.io object.
 const APIServerClusterName = "cluster"
+
+// shouldHonorClusterTLSProfile reports whether a component should honor the
+// cluster-wide TLS security profile given the apiserver tlsAdherence policy.
+// NoOpinion and LegacyAdheringComponentsOnly opt out; every other value
+// (including unknown ones, for forward-compatible secure defaults) honors it.
+func shouldHonorClusterTLSProfile(tlsAdherence configv1.TLSAdherencePolicy) bool {
+	switch tlsAdherence {
+	case configv1.TLSAdherencePolicyNoOpinion, configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly:
+		return false
+	default:
+		return true
+	}
+}
 
 // FetchAPIServerFunc retrieves apiserver.config.openshift.io/cluster.
 type FetchAPIServerFunc func(ctx context.Context) (*configv1.APIServer, error)
@@ -84,7 +96,7 @@ func ResolveHonoredTLSProfile(ctx context.Context, fetch FetchAPIServerFunc, com
 	}
 
 	adherence := apiServer.Spec.TLSAdherence
-	if !libgocrypto.ShouldHonorClusterTLSProfile(adherence) {
+	if !shouldHonorClusterTLSProfile(adherence) {
 		klog.V(4).Infof("skipping cluster TLS profile for %s: apiserver tlsAdherence=%q", component, adherence)
 		return nil, nil
 	}

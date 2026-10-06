@@ -92,13 +92,16 @@ type Reconciler struct {
 	now                   *common.Now
 }
 
-// +kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
+// Operator's own custom resources and leader-election leases.
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=externalsecretsconfigs,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=externalsecretsconfigs/status,verbs=get;update
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=externalsecretsconfigs/finalizers,verbs=update
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=externalsecretsmanagers,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch
 
+// Permissions the operator needs explicitly: reading cluster configuration (e.g.
+// the TLS profile) and creating/managing the operand resources it owns.
+// +kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=events;secrets;services;serviceaccounts,verbs=get;list;watch;create;update;delete;patch
@@ -107,6 +110,8 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 
+// Permissions held by the operator so it can create the operand's RBAC and grant
+// the operand access to the resources it reconciles.
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
@@ -341,9 +346,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 	)
 
-	// Watch cluster APIServer for TLS profile changes. Generation changes on
-	// apiserver.config.openshift.io/cluster trigger reconciliation so operand
-	// deployments can be updated with new TLS settings.
+	// Watch cluster APIServer for TLS profile changes. Only spec.tlsSecurityProfile
+	// updates on apiserver.config.openshift.io/cluster trigger reconciliation so
+	// operand deployments can be updated with new TLS settings; unrelated apiserver
+	// updates (audit, encryption, serving certs, ...) are ignored.
 	mgrBuilder.Watches(
 		&configv1.APIServer{},
 		handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
@@ -351,7 +357,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 				NamespacedName: types.NamespacedName{Name: common.ExternalSecretsConfigObjectName},
 			}}
 		}),
-		builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		builder.WithPredicates(apiServerTLSProfileChangedPredicate),
 	)
 
 	// Conditionally watch Certificate if cert-manager is installed

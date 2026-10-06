@@ -64,10 +64,26 @@ func TestClientTLSConfig_emptyCiphers(t *testing.T) {
 	}
 }
 
-func TestClientTLSConfig_curvePreferencesSet(t *testing.T) {
+func TestClientTLSConfig_curvePreferencesFromProfileGroups(t *testing.T) {
+	// The Intermediate profile exposes TLS groups, which take precedence over the
+	// DefaultCurvePreferences fallback.
 	spec, err := EffectiveSpec(nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	cfg, err := ClientTLSConfig(spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.CurvePreferences) == 0 {
+		t.Fatal("expected non-empty curve preferences")
+	}
+}
+
+func TestClientTLSConfig_curvePreferencesFallback(t *testing.T) {
+	// A profile without groups falls back to DefaultCurvePreferences.
+	spec := &configv1.TLSProfileSpec{
+		MinTLSVersion: configv1.VersionTLS12,
 	}
 	cfg, err := ClientTLSConfig(spec, nil)
 	if err != nil {
