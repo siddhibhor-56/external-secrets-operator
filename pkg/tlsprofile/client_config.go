@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	configv1 "github.com/openshift/api/config/v1"
-	libgocrypto "github.com/openshift/library-go/pkg/crypto"
+	crtls "github.com/openshift/controller-runtime-common/pkg/tls"
 )
 
 // DefaultCurvePreferences is the explicit key-exchange curve order for TLS
@@ -26,41 +26,21 @@ func ClientTLSConfig(spec *configv1.TLSProfileSpec, rootCAs *x509.CertPool) (*tl
 	if spec == nil {
 		return nil, fmt.Errorf("TLS profile spec is nil")
 	}
-	minVer, err := libgocrypto.TLSVersion(string(spec.MinTLSVersion))
-	if err != nil {
-		return nil, fmt.Errorf("min TLS version: %w", err)
+
+	// NewTLSConfigFromProfile applies the profile's minimum TLS version and
+	// (below TLS 1.3) cipher suites to the returned tls.Config.
+	configure, unsupported := crtls.NewTLSConfigFromProfile(*spec)
+	if len(unsupported) > 0 {
+		return nil, fmt.Errorf("unsupported TLS cipher/group names in profile: %v", unsupported)
 	}
+
 	tlsConfig := &tls.Config{
-		RootCAs:          rootCAs,
-		MinVersion:       minVer,
+		RootCAs: rootCAs,
+		// The cluster TLS profile API does not yet expose curve preferences, so
+		// default them here; NewTLSConfigFromProfile only overrides this when the
+		// profile sets explicit groups.
 		CurvePreferences: append([]tls.CurveID(nil), DefaultCurvePreferences...),
 	}
-	if minVer == tls.VersionTLS13 {
-		return tlsConfig, nil
-	}
-	iana := libgocrypto.OpenSSLToIANACipherSuites(spec.Ciphers)
-	if len(spec.Ciphers) > 0 && len(iana) == 0 {
-		return nil, fmt.Errorf("no cipher suites after OpenSSL to IANA mapping")
-	}
-	cipherIDs, err := cipherSuiteIDsFromIANANames(iana)
-	if err != nil {
-		return nil, err
-	}
-	tlsConfig.CipherSuites = cipherIDs
+	configure(tlsConfig)
 	return tlsConfig, nil
-}
-
-func cipherSuiteIDsFromIANANames(names []string) ([]uint16, error) {
-	if len(names) == 0 {
-		return nil, nil
-	}
-	out := make([]uint16, 0, len(names))
-	for _, name := range names {
-		id, err := libgocrypto.CipherSuite(name)
-		if err != nil {
-			return nil, fmt.Errorf("cipher suite %q: %w", name, err)
-		}
-		out = append(out, id)
-	}
-	return out, nil
 }

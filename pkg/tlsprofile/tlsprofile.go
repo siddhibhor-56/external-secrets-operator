@@ -1,11 +1,12 @@
 package tlsprofile
 
 import (
+	"crypto/tls"
 	"fmt"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
-	libgocrypto "github.com/openshift/library-go/pkg/crypto"
+	crtls "github.com/openshift/controller-runtime-common/pkg/tls"
 )
 
 func cloneBuiltinProfileSpec(profileType configv1.TLSProfileType) *configv1.TLSProfileSpec {
@@ -65,8 +66,23 @@ func tlsVersionString(v configv1.TLSProtocolVersion) string {
 	}
 }
 
-func joinIANACiphers(openSSLNames []string) string {
-	iana := libgocrypto.OpenSSLToIANACipherSuites(openSSLNames)
+// joinIANACiphers converts the given cipher names (OpenSSL or IANA form) to the
+// IANA names expected by the upstream external-secrets binary, dropping any that
+// are unsupported. It leans on controller-runtime-common to resolve cipher codes
+// (forcing TLS 1.2 so cipher suites are populated) and the stdlib to map those
+// codes back to canonical IANA names.
+func joinIANACiphers(cipherNames []string) string {
+	configure, _ := crtls.NewTLSConfigFromProfile(configv1.TLSProfileSpec{
+		MinTLSVersion: configv1.VersionTLS12,
+		Ciphers:       cipherNames,
+	})
+	tlsConf := &tls.Config{}
+	configure(tlsConf)
+
+	iana := make([]string, 0, len(tlsConf.CipherSuites))
+	for _, id := range tlsConf.CipherSuites {
+		iana = append(iana, tls.CipherSuiteName(id))
+	}
 	return strings.Join(iana, ",")
 }
 
