@@ -17,6 +17,7 @@ limitations under the License.
 package external_secrets
 
 import (
+	"errors"
 	"reflect"
 
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -24,6 +25,7 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 
+	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/tlsprofile"
 )
 
@@ -61,6 +63,10 @@ func (r *Reconciler) resolveOperandTLSProfile() (*configv1.TLSProfileSpec, error
 		tlsprofile.FetchErrorPropagateExceptNotFound,
 	)
 	if err != nil {
+		var invalidProfile *tlsprofile.InvalidProfileError
+		if errors.As(err, &invalidProfile) {
+			return nil, common.NewUserConfigurationError(err, "cluster TLS security profile apiserver.config.openshift.io/cluster is invalid")
+		}
 		r.log.Error(err, "failed to resolve cluster TLS profile")
 		return nil, err
 	}

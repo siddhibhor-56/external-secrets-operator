@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,6 +63,10 @@ const (
 	metricsKeyFileName = "tls.key"
 
 	openshiftCACertificateFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
+	// startupTLSProfileTimeout defines the max waiting timeout for reading TLS profile from the
+	// cluster at startup.
+	startupTLSProfileTimeout = 30 * time.Second
 )
 
 // validateMetricsCertDir validates that the certificate and key files exist in the given directory.
@@ -181,8 +186,10 @@ func resolveClusterTLSOpt(restConfig *rest.Config) (func(*tls.Config), error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create uncached client for TLS profile resolution: %w", err)
 	}
+	startupCtx, cancel := context.WithTimeout(ctx, startupTLSProfileTimeout)
+	defer cancel()
 	tlsSpec, err := tlsprofile.ResolveHonoredTLSProfile(
-		ctx,
+		startupCtx,
 		tlsprofile.NewClientReaderAPIServerFetch(tlsprofile.NewClientReaderObjectGetter(uncachedClient)),
 		"external-secrets-operator",
 		tlsprofile.FetchErrorPropagateExceptNotFound,

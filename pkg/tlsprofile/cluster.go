@@ -15,6 +15,13 @@ import (
 // APIServerClusterName is the singleton apiserver.config.openshift.io object.
 const APIServerClusterName = "cluster"
 
+type InvalidProfileError struct {
+	err error
+}
+
+func (e *InvalidProfileError) Error() string { return e.err.Error() }
+func (e *InvalidProfileError) Unwrap() error { return e.err }
+
 // shouldHonorClusterTLSProfile reports whether a component should honor the
 // cluster-wide TLS security profile given the apiserver tlsAdherence policy.
 // NoOpinion and LegacyAdheringComponentsOnly opt out; every other value
@@ -104,5 +111,9 @@ func ResolveHonoredTLSProfile(ctx context.Context, fetch FetchAPIServerFunc, com
 		klog.Warningf("apiserver.config.openshift.io/cluster has unknown tlsAdherence %q; treating as StrictAllComponents for %s", adherence, component)
 	}
 
-	return EffectiveSpec(apiServer.Spec.TLSSecurityProfile)
+	spec, err := EffectiveSpec(apiServer.Spec.TLSSecurityProfile)
+	if err != nil {
+		return nil, &InvalidProfileError{err: err}
+	}
+	return spec, nil
 }
