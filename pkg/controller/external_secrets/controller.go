@@ -346,19 +346,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 	)
 
-	// Watch cluster APIServer for TLS profile changes. Only spec.tlsSecurityProfile
-	// updates on apiserver.config.openshift.io/cluster trigger reconciliation so
-	// operand deployments can be updated with new TLS settings; unrelated apiserver
-	// updates (audit, encryption, serving certs, ...) are ignored.
-	mgrBuilder.Watches(
-		&configv1.APIServer{},
-		handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
-			return []reconcile.Request{{
-				NamespacedName: types.NamespacedName{Name: common.ExternalSecretsConfigObjectName},
-			}}
-		}),
-		builder.WithPredicates(apiServerTLSProfileChangedPredicate),
-	)
+	// apiserver.config.openshift.io/cluster is deliberately not watched here: a
+	// change to the cluster TLS security profile restarts the operator (see the
+	// TLS security profile watcher wired up in main), which re-resolves the
+	// profile and re-reconciles the operand deployments from scratch.
 
 	// Conditionally watch Certificate if cert-manager is installed
 	// Note: Certificate is already declared in buildCacheObjectList(), this just sets up the watch

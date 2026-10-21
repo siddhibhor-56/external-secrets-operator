@@ -143,8 +143,8 @@ func TestExternalSecretsWebhookTLSArgs_intermediate(t *testing.T) {
 	if !ok {
 		t.Fatal("expected --tls-curve-preferences")
 	}
-	if curves != DefaultCurvePreferencesArg {
-		t.Fatalf("curve preferences: got %q, want %q", curves, DefaultCurvePreferencesArg)
+	if want := "X25519,CurveP256,CurveP384,CurveP521"; curves != want {
+		t.Fatalf("curve preferences: got %q, want %q", curves, want)
 	}
 }
 
@@ -180,7 +180,8 @@ func TestTlsVersionString(t *testing.T) {
 		{configv1.VersionTLS11, "1.1"},
 		{configv1.VersionTLS12, "1.2"},
 		{configv1.VersionTLS13, "1.3"},
-		{"UnknownVersion", "1.2"},
+		{"UnknownVersion", ""},
+		{"", ""},
 	}
 	for _, tc := range cases {
 		got := tlsVersionString(tc.input)

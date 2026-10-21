@@ -24,6 +24,7 @@ import (
 	operatorv1alpha1 "github.com/openshift/external-secrets-operator/api/v1alpha1"
 	"github.com/openshift/external-secrets-operator/pkg/controller/common"
 	"github.com/openshift/external-secrets-operator/pkg/operator/assets"
+	"github.com/openshift/external-secrets-operator/pkg/tlsprofile"
 )
 
 // operandArgsEnvSeparator splits OPERAND_*_ARGS on commas that introduce the next
@@ -32,12 +33,14 @@ var operandArgsEnvSeparator = regexp.MustCompile(`,+\s*--`)
 
 // createOrApplyDeployments ensures required Deployment resources exist and are correctly configured.
 func (r *Reconciler) createOrApplyDeployments(esc *operatorv1alpha1.ExternalSecretsConfig, resourceMetadata common.ResourceMetadata, externalSecretsConfigCreateRecon bool) error {
-	// Resolve cluster TLS profile for operand deployments. The resolved spec is
-	// not consumed yet (see resolveOperandTLSProfile's TODO), but resolution must
-	// still succeed so configuration errors surface during reconciliation.
-	if _, err := r.resolveOperandTLSProfile(); err != nil {
-		return err
-	}
+	// Cluster TLS profile for the operand deployments, resolved once at operator
+	// startup. The operator restarts when the cluster profile changes, so there is
+	// no need to re-read apiserver.config.openshift.io/cluster here.
+	//
+	// TODO: once the upstream external-secrets operand supports --tls-min-version,
+	// --tls-ciphers, and --tls-curve-preferences flags, use this spec to inject the
+	// flags into the operand container args.
+	_ = tlsprofile.StartupProfile()
 
 	// Define all Deployment assets to apply based on conditions.
 	deployments := []struct {

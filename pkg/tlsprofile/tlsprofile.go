@@ -50,7 +50,9 @@ var ExternalSecretsCipherSuiteArgKeys = []string{
 
 // tlsVersionString converts an OpenShift TLS version constant (e.g.
 // VersionTLS12) to the short form expected by the upstream external-secrets
-// binary (e.g. "1.2").
+// binary (e.g. "1.2"). An unset or unrecognized version returns an empty
+// string, so that no --tls-min-version flag is passed and the operand's own
+// default applies.
 func tlsVersionString(v configv1.TLSProtocolVersion) string {
 	switch v {
 	case configv1.VersionTLS10:
@@ -62,20 +64,17 @@ func tlsVersionString(v configv1.TLSProtocolVersion) string {
 	case configv1.VersionTLS13:
 		return "1.3"
 	default:
-		return "1.2"
+		return ""
 	}
 }
 
-// joinIANACiphers converts the given cipher names (OpenSSL or IANA form) to the
-// IANA names expected by the upstream external-secrets binary, dropping any that
-// are unsupported. It leans on controller-runtime-common to resolve cipher codes
-// (forcing TLS 1.2 so cipher suites are populated) and the stdlib to map those
+// joinIANACiphers converts the profile's cipher names (OpenSSL or IANA form) to
+// the IANA names expected by the upstream external-secrets binary, dropping any
+// that are unsupported. It leans on controller-runtime-common to resolve cipher
+// codes for the profile's own minimum TLS version and the stdlib to map those
 // codes back to canonical IANA names.
-func joinIANACiphers(cipherNames []string) string {
-	configure, _ := crtls.NewTLSConfigFromProfile(configv1.TLSProfileSpec{
-		MinTLSVersion: configv1.VersionTLS12,
-		Ciphers:       cipherNames,
-	})
+func joinIANACiphers(spec configv1.TLSProfileSpec) string {
+	configure, _ := crtls.NewTLSConfigFromProfile(spec)
 	tlsConf := &tls.Config{}
 	configure(tlsConf)
 
@@ -112,20 +111,26 @@ func externalSecretsTLSArgs(spec *configv1.TLSProfileSpec) []string {
 	if spec == nil {
 		return nil
 	}
-	minVersion := tlsVersionString(spec.MinTLSVersion)
-	args := []string{
-		"--tls-min-version=" + minVersion,
+	var args []string
+	if minVersion := tlsVersionString(spec.MinTLSVersion); minVersion != "" {
+		args = append(args, "--tls-min-version="+minVersion)
 	}
 	if spec.MinTLSVersion != configv1.VersionTLS13 {
-		ciphers := joinIANACiphers(spec.Ciphers)
+		ciphers := joinIANACiphers(*spec)
 		if ciphers != "" {
 			args = append(args, "--tls-ciphers="+ciphers)
 		}
 	}
-	args = append(args, "--tls-curve-preferences="+DefaultCurvePreferencesArg)
+	args = append(args, "--tls-curve-preferences="+curvePreferencesArg())
 	return args
 }
 
-// DefaultCurvePreferencesArg is the explicit key-exchange curve order passed to
-// external-secrets operands.
-const DefaultCurvePreferencesArg = "X25519,CurveP256,CurveP384,CurveP521"
+// curvePreferencesArg renders DefaultCurvePreferences as the explicit
+// key-exchange curve order passed to external-secrets operands.
+func curvePreferencesArg() string {
+	names := make([]string, 0, len(DefaultCurvePreferences))
+	for _, id := range DefaultCurvePreferences {
+		names = append(names, id.String())
+	}
+	return strings.Join(names, ",")
+}
