@@ -1,6 +1,8 @@
 module github.com/openshift/external-secrets-operator/test
 
-go 1.26.3
+go 1.26.0
+
+replace github.com/openshift/external-secrets-operator => ..
 
 require (
 	github.com/aws/aws-sdk-go v1.55.8
@@ -9,7 +11,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.40.0
 	github.com/openshift/external-secrets-operator v0.0.0-00010101000000-000000000000
-	github.com/operator-framework/api v0.45.0
+	github.com/operator-framework/api v0.42.0
 	github.com/stretchr/testify v1.11.1
 	github.com/vmware-archive/yaml-patch v0.0.11
 	k8s.io/api v0.36.3
@@ -111,5 +113,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
-
-replace github.com/openshift/external-secrets-operator => ..
